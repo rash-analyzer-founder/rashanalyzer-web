@@ -1,0 +1,117 @@
+body {
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:150vh; 
+    background:url(Darkbackground.jpg) no-repeat center center fixed;
+    margin:0px;
+    font-family: "Lexend", sans-serif;
+}
+
+.calculator-body {
+background-color:hsl(0, 0%, 10%);
+border-radius:20px;
+padding:25px;
+}
+
+.buttons {
+    display:grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap:10px;
+}
+button{
+    background-color:black;
+    color:white;  
+    padding:5px;
+    border:none;
+    border-radius:50px;
+    width:100px;
+    height:100px; 
+    font-family: "Lexend", sans-serif;
+    font-size:1.9rem;
+    cursor:pointer;
+}
+#display {
+    width:100%;
+    overflow:auto;
+    height:50px; 
+    box-sizing:border-box;
+    font-family: "Lexend";
+    font-size:1.9rem;
+    padding:20px;
+    border:none;
+    border-radius:10px;
+    background-color:hsl(0, 0%, 20%);
+    color:white;
+}
+
+#display-output {
+    display:none;
+}
+
+button:hover {
+    background-color:hsl(0, 0%, 20%);
+}
+.buttons button:active {
+    background-color:hsl(0, 0%, 30%);
+}
+.operator-btn {
+    background-color: hsl(39, 100%, 50%);
+    color:white;
+}
+.operator-btn:hover {
+    background-color: hsl(39, 100%, 60%);
+    color:white;
+}
+.operator-btn:active {
+    background-color: hsl(39, 100%, 70%);
+    color:white;
+}
+.clearordelete {
+    background-color: hsl(130, 70%, 35%);
+    color:white;
+}
+.clearordelete:hover {
+    background-color: hsl(130, 70%, 45%);
+    color:white;
+}
+.clearordelete:active {
+    background-color: hsl(130, 70%, 55%);
+    color:white;
+}
+.special-num {
+    background-color:#A074C4;
+}
+.special-num:hover {
+    background-color:hsl(273, 40%, 71%);
+}
+.special-num:active {
+    background-color:hsl(273, 40%, 81%);
+} 
+.trig {
+    background-color:hsl(201, 56%, 47%);
+}
+.trig:hover{
+    background-color:hsl(201, 56%, 57%);
+}
+.trig:active{
+    background-color:hsl(201, 56%, 67%);
+}
+.specialoperator {
+    background-color:hsl(0, 100%, 61%);
+}
+.specialoperator:hover {
+    background-color:hsl(0, 100%, 71%);
+}
+.specialoperator:active {
+    background-color:hsl(0, 100%, 81%);
+}
+.bracket {
+    background-color:#1E6B9C;
+}
+.bracket:hover {
+    background-color:hsl(203, 68%, 46%);
+}
+.bracket:active {
+    background-color:hsl(203, 68%, 56%);
+}

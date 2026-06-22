@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Calculator - RashAnalyzer</title> 
+        <link rel="stylesheet" href="calculator.css">
+        <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@100..900&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css">
+        <link rel="icon" href="Favicon-photoaidcom-cropped.svg" type="image/svg+xml">
+        <script src="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.js"></script>
+    </head>
+    <body>
+        <div class="calculator-body">
+    <input type="text" id="display" placeholder="0">
+    <div class="buttons">
+    <button onclick="appendToDisplay('sin(')" class="trig">sin</button>
+    <button onclick="appendToDisplay('cos(')" class="trig">cos</button>
+    <button onclick="appendToDisplay('tan(')" class="trig">tan</button>
+    <button onclick="appendToDisplay('(')" class="bracket">(</button>
+    <button onclick="appendToDisplay(')')" class="bracket">)</button>
+
+    <button onclick="appendToDisplay('^')" class="specialoperator">^</button>
+    <button onclick="appendToDisplay('√(')" class="specialoperator">√</button>
+    <button onclick="appendToDisplay('!')" class="specialoperator">!</button>
+    <button onclick="appendToDisplay('ln(')" class="specialoperator">ln</button>
+    <button onclick="clearDisplay()" class="clearordelete">C</button>
+    <button onclick="deleteLast()" class="clearordelete">DEL</button>
+    <button onclick="appendToDisplay('π')" class="special-num">π</button>
+    <button onclick="appendToDisplay('e')" class="special-num">e</button>
+    <button onclick="appendToDisplay('7')">7</button>
+    <button onclick="appendToDisplay('8')">8</button>
+    <button onclick="appendToDisplay('9')">9</button>
+    <button onclick="appendToDisplay('+')" class="operator-btn">+</button>
+
+    <button onclick="appendToDisplay('4')">4</button>
+    <button onclick="appendToDisplay('5')">5</button>
+    <button onclick="appendToDisplay('6')">6</button>
+    <button onclick="appendToDisplay('-')" class="operator-btn">-</button>
+
+    <button onclick="appendToDisplay('1')">1</button>
+    <button onclick="appendToDisplay('2')">2</button>
+    <button onclick="appendToDisplay('3')">3</button>
+    <button onclick="appendToDisplay('*')" class="operator-btn">×</button>
+
+    <button onclick="appendToDisplay('0')" class="zero-btn">0</button>
+    <button onclick="appendToDisplay('.')">.</button>
+    <button onclick="calculate()" id="equal-btn">=</button>
+    <button onclick="appendToDisplay('/')" class="operator-btn">/</button>
+
+    
+</div>
+</div>
+    <script src="calculator.js"></script>

@@ -1,0 +1,379 @@
+openapi: 3.0.3
+info:
+  title: Chat Auth Challenge–Response API
+  description: |
+    Server-side verification API for client-held signing keys.  
+    Clients register their public signing keys, request a short-lived challenge,
+    sign it locally with the private key, and exchange the signature for a JWT.
+  version: 1.0.0
+servers:
+  - url: http://localhost:4000
+    description: Local development server
+paths:
+  /api/v1/register:
+    post:
+      summary: Register a new user with a public signing key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/v1/challenge:
+    post:
+      summary: Request a login challenge (nonce)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeRequest'
+      responses:
+        '200':
+          description: Challenge created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/verify:
+    post:
+      summary: Verify signature of challenge and issue tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Verification successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '410':
+          $ref: '#/components/responses/Gone'
+
+  /api/v1/refresh:
+    post:
+      summary: Refresh access token using a refresh token (httpOnly cookie)
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: New access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/message:
+    post:
+      summary: Submit a chat message using an auth server-issued access token
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uid, name, email]
+              properties:
+                text:
+                  type: string
+                  example: Hello world
+                audioUrl:
+                  type: string
+                  format: uri
+                uid:
+                  type: string
+                name:
+                  type: string
+                email:
+                  type: string
+      responses:
+        '201':
+          description: Message created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  timestamp:
+                    type: string
+                  sender:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/messages:
+    get:
+      summary: Fetch authenticated chat messages from the server message store
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Messages returned
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    uid:
+                      type: string
+                    name:
+                      type: string
+                    email:
+                      type: string
+                    text:
+                      type: string
+                    audioUrl:
+                      type: string
+                    timestamp:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/revoke:
+    post:
+      summary: Revoke session or key (admin or owner required)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeRequest'
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericOK'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/user/{username}/pubkey:
+    get:
+      summary: Get the stored public signing key for a user
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Public key returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicKeyResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: refreshToken
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [username, publicSigningKeyJwk]
+      properties:
+        username:
+          type: string
+          example: alice
+        displayName:
+          type: string
+          example: Alice
+        publicSigningKeyJwk:
+          type: object
+          description: Public signing key in JWK format
+        publicEncryptionKeyJwk:
+          type: object
+          description: Optional public encryption key (JWK)
+    RegisterResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+    ChallengeRequest:
+      type: object
+      required: [username]
+      properties:
+        username:
+          type: string
+    ChallengeResponse:
+      type: object
+      properties:
+        challengeId:
+          type: string
+          format: uuid
+        nonce:
+          type: string
+          description: base64-encoded random nonce
+        expiresAt:
+          type: string
+          format: date-time
+    VerifyRequest:
+      type: object
+      required: [username, challengeId, signature, signedPayload]
+      properties:
+        username:
+          type: string
+        challengeId:
+          type: string
+          format: uuid
+        signature:
+          type: string
+          description: base64 signature over the signedPayload
+        signedPayload:
+          type: string
+          description: base64 JSON payload that was signed (e.g. {challengeId,nonce,username,ts})
+    VerifyResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+          description: seconds until access token expiry
+    RefreshResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+    RevokeRequest:
+      type: object
+      required: [username, target, id]
+      properties:
+        username:
+          type: string
+        target:
+          type: string
+          enum: [session, key]
+        id:
+          type: string
+          description: session id or key id
+    PublicKeyResponse:
+      type: object
+      properties:
+        publicSigningKeyJwk:
+          type: object
+        status:
+          type: string
+          example: active
+    GenericOK:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Gone:
+      description: Gone
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Invalid request
+
+  examples:
+    RegisterExample:
+      value:
+        username: alice
+        displayName: Alice
+        publicSigningKeyJwk: { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." }
+
+tags:
+  - name: auth
+    description: Authentication endpoints (challenge/verify)
+
+externalDocs:
+  description: Security notes
+  url: 'https://example.com/docs/security'
