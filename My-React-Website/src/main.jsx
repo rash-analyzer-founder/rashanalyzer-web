@@ -1,9 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import Chat from './Chat.jsx'
+import App from './Frontend.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <Chat />
+    <App />
   </StrictMode>
 )

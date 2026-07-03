@@ -1,13 +1,15 @@
+// Run npm install express cors
 const express = require('express');
+const cors = require('cors');
 const app = express();
-const PORT = 3000;
 
-// This handles the main route of your website
-app.get('/', (req, res) => {
-    res.send('Hello World! Your backend is officially alive!');
+// Enable CORS so your React frontend can access this API
+app.use(cors());
+
+app.get('/api/message', (req, res) => {
+  res.json({ text: "Hello from the Node.js backend!" });
 });
 
-// This starts the server and listens for requests
-app.listen(PORT, () => {
-    console.log(`Server is running smoothly on http://localhost:${PORT}`);
+app.listen(3000, () => {
+  console.log('Backend running on http://localhost:3000');
 });
