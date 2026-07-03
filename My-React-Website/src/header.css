@@ -7,9 +7,12 @@
     width: 100%;
 }
 
-.site-header img {
+.site-header svg {
     margin: 0;
     display: block;
+    width: 100px;
+    height: 100px;
+    stroke: #3b82f6;
 }
 
 #rashanalyzer-title {

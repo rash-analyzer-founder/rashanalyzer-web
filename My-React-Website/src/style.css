@@ -178,6 +178,13 @@ abbr[title] {
     object-fit: contain;
     filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.3));
 }
+.app-logo {
+    width: 70px;
+    height: 70px;
+    margin-right: 12px;
+    stroke: #4facfe;
+    stroke-width: 1.5px;
+}
 .robosaproject {
     background: linear-gradient(to top, #ff416c, #ff4b2b);
     color: white;

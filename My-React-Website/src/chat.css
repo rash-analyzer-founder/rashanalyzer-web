@@ -218,6 +218,41 @@ html, body, #root, .chat-app, * {
   border-radius: 12px;
   padding: 0.85rem 0.9rem;
   font-size: 0.95rem;
+
+/* Lucide icon sizing for chat controls */
+.panel-toggle-icon,
+.panel-close-icon,
+.channel-action-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 1.5px;
+  display: inline-block;
+}
+
+.panel-toggle,
+.panel-close,
+.channel-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Reduce button sizes and brighten gradients */
+.channel-action {
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #7fb3ff 0%, #60a5fa 50%, #4f46e5 100%);
+  color: white;
+  gap: 0.4rem;
+}
+
+.channel-action.primary-action {
+  background: linear-gradient(135deg, #60dbff 0%, #4facfe 50%, #00f2fe 100%);
+}
+
+.channel-action .channel-action-label {
+  font-size: 0.9rem;
+}
   outline: none;
 }
 
@@ -372,12 +407,13 @@ html, body, #root, .chat-app, * {
 .channel-action {
   border: none;
   border-radius: 999px;
-  padding: 0.75rem 1rem;
-  background: #eff6ff;
-  color: #1f2937;
+  padding: 0.45rem 0.6rem;
+  background: #f0f9ff;
+  color: #0f172a;
   cursor: pointer;
   font-weight: 600;
-  transition: transform 0.2s ease, background 0.2s ease;
+  transition: transform 0.18s ease, background 0.18s ease;
+  font-size: 0.95rem;
 }
 
 .creator-toggle-row {
@@ -408,17 +444,17 @@ html, body, #root, .chat-app, * {
 .channel-button:hover,
 .channel-action:hover {
   transform: translateY(-1px);
-  background: #dbeafe;
+  background: linear-gradient(135deg, #dbeeff 0%, #c7e6ff 100%);
 }
 
 .channel-button.active {
-  background: var(--gradient-button);
+  background: linear-gradient(135deg, #8fd8ff 0%, #60a5fa 50%, #4f46e5 100%);
   color: #ffffff;
-  box-shadow: 0 12px 24px rgba(79, 70, 229, 0.18);
+  box-shadow: 0 16px 36px rgba(79, 70, 229, 0.22);
 }
 
 .channel-action {
-  background: var(--gradient-strong);
+  background: linear-gradient(135deg, #60a5fa 0%, #4f46e5 60%);
   color: #ffffff;
 }
 
@@ -454,6 +490,44 @@ html, body, #root, .chat-app, * {
   gap: 0.5rem;
   flex-wrap: wrap;
   margin-bottom: 1rem;
+}
+
+.channel-type-icon {
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.4rem;
+}
+
+.channel-type-label {
+  font-size: 0.95rem;
+}
+
+/* Auth icon sizing and styling */
+.profile-menu-icon,
+.auth-icon,
+.auth-toggle-icon,
+.auth-submit-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-right: 0.4rem;
+  stroke-width: 1.75px;
+}
+
+.auth-button,
+.auth-submit,
+.auth-toggle button,
+.profile-menu-signout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.auth-button span,
+.auth-submit span,
+.auth-toggle button span,
+.profile-menu-signout span {
+  font-size: 0.95rem;
 }
 
 .invite-list {
