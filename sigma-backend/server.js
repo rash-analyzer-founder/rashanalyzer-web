@@ -1,9 +1,6 @@
 const express = require('express');
 const app = express();
-const cors = require('cors');
 const PORT = 3000;
-
-app.use(cors())
 
 // This handles the main route of your website
 app.get('/', (req, res) => {
