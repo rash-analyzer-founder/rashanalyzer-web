@@ -64,7 +64,7 @@ const openAccountDb = () => {
 const getAccount = async (username) => {
   const db = await openAccountDb()
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(DB_ACCOUNT_STORE, "readonly")
+    const tx = (db as any).transaction(DB_ACCOUNT_STORE, "readonly")
     const store = tx.objectStore(DB_ACCOUNT_STORE)
     const request = store.get(username)
     request.onsuccess = () => resolve(request.result)
@@ -74,8 +74,9 @@ const getAccount = async (username) => {
 
 const saveAccount = async (account) => {
   const db = await openAccountDb()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(DB_ACCOUNT_STORE, "readwrite")
+  return new Promise<void>((resolve, reject) => {
+
+    const tx = (db as any).transaction(DB_ACCOUNT_STORE, "readwrite")
     const store = tx.objectStore(DB_ACCOUNT_STORE)
     const request = store.put(account)
     request.onsuccess = () => resolve()
@@ -298,13 +299,13 @@ const refreshServerAuth = async () => {
 }
 
 const supportsPasswordCredentials = () => {
-  return typeof navigator !== "undefined" && "credentials" in navigator && typeof PasswordCredential !== "undefined"
+  return typeof navigator !== "undefined" && "credentials" in navigator && typeof (window as any).PasswordCredential !== "undefined"
 }
 
 const getStoredPasswordCredential = async () => {
   if (!supportsPasswordCredentials()) return null
   try {
-    return await navigator.credentials.get({ password: true, mediation: "silent" })
+    return await navigator.credentials.get({ password: true, mediation: "silent" } as any)
   } catch (error) {
     console.warn("Password credential retrieval failed:", error)
     return null
@@ -314,7 +315,7 @@ const getStoredPasswordCredential = async () => {
 const storePasswordCredential = async (username, password) => {
   if (!supportsPasswordCredentials()) return false
   try {
-    const credential = new PasswordCredential({ id: username, password })
+    const credential = new (window as any).PasswordCredential({ id: username, password })
     await navigator.credentials.store(credential)
     return true
   } catch (error) {
@@ -585,8 +586,8 @@ function Chat() {
   }
 
   const handleBrowserCredentialSignIn = async () => {
-    const cred = await getStoredPasswordCredential()
-    if (!cred || !cred.id || !cred.password) {
+    const cred = await getStoredPasswordCredential() as any
+    if (!cred || !cred?.id || !cred?.password) {
       setLocalAuthError("No saved browser credential available.")
       return
     }
@@ -609,7 +610,7 @@ function Chat() {
   }
 
   const getSpaceSubchannels = (spaceId) => {
-    return channels.filter((channel) => channel.parentId === spaceId)
+    return channels.filter((channel: any) => channel.parentId === spaceId)
   }
 
   const getSidebarChannels = () => {
@@ -629,7 +630,7 @@ function Chat() {
     const hasSpace = channels.some((channel) => channel.id === space.id)
     if (hasSpace) {
       const generalChannel = channels.find(
-        (channel) => channel.spaceId === space.id && channel.type === "space-subchannel"
+        (channel: any) => channel.spaceId === space.id && channel.type === "space-subchannel"
       )
       setCurrentChannelId(generalChannel?.id || space.id)
       return
@@ -651,7 +652,7 @@ function Chat() {
   const createSpaceSubchannel = () => {
     setChannelError(null)
     const current = getCurrentChannel()
-    const parentSpaceId = current?.type === "space" ? current.id : current?.spaceId
+    const parentSpaceId = (current as any)?.type === "space" ? (current as any).id : (current as any)?.spaceId
     if (!parentSpaceId) {
       setChannelError("Select a space before creating subchannels.")
       return
@@ -791,7 +792,7 @@ function Chat() {
       return
     }
 
-    const account = await getAccount(username)
+    const account = await getAccount(username) as any
     if (localAuthMode === "login") {
       if (!account) {
         setLocalAuthError("User not found.")
@@ -937,10 +938,10 @@ function Chat() {
     }
   }
 
-  const handleSend = async (messageText) => {
+  const handleSend = async (messageText: any) => {
     if (!messageText || !user) return
 
-    const channel = getCurrentChannel()
+    const channel = getCurrentChannel() as any
     const spaceId = channel?.type === "space" ? channel.id : channel?.spaceId || null
     const messagePayload = {
       channelId: channel?.id || "global",
@@ -987,7 +988,7 @@ function Chat() {
       await uploadBytes(storageReference, audioBlob, { contentType: audioBlob.type || "audio/webm" })
       const audioUrl = await getDownloadURL(storageReference)
 
-      const current = getCurrentChannel()
+      const current = getCurrentChannel() as any
       const spaceId = current?.type === "space" ? current.id : current?.spaceId || null
       const voicePayload = {
         channelId: current?.id || "global",
@@ -1019,7 +1020,7 @@ function Chat() {
   const currentSpace = currentChannel?.type === "space"
     ? currentChannel
     : currentChannel?.type === "space-subchannel"
-      ? channels.find((channel) => channel.id === currentChannel.spaceId)
+      ? channels.find((channel) => channel.id === (currentChannel as any).spaceId)
       : null
 
   return (

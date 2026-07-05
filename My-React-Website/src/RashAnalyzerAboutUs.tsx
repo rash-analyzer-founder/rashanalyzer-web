@@ -1,5 +1,5 @@
 import './FAQ.css'
-import Header from "./header.jsx"
+import Header from "./header.js"
 function App() {
 return (
     <>
