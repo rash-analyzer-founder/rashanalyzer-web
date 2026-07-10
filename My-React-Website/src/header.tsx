@@ -1,4 +1,4 @@
-import { Flask } from 'lucide-react';
+import { FlaskConical } from 'lucide-react';
 import './header.css';
 
 function Header() {
