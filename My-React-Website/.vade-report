@@ -1,0 +1,55 @@
+# Vercel Speed Insights Integration Report
+
+## Summary
+Successfully installed and configured Vercel Speed Insights for the React + Vite project.
+
+## Implementation Details
+
+### Framework Detection
+- **Framework**: React 19.2.5 with Vite 8.1.4
+- **Package Manager**: npm (package-lock.json present)
+- **TypeScript**: Enabled with TypeScript 7.0.2
+
+### Changes Made
+
+#### 1. Package Installation
+- Installed `@vercel/speed-insights` version 2.0.0
+- Updated `package.json` to include the new dependency
+- Updated `package-lock.json` with the new package and its dependencies (253 packages added)
+
+#### 2. Code Integration
+Modified `src/main.tsx` to integrate Speed Insights:
+- Added import: `import { SpeedInsights } from '@vercel/speed-insights/react'`
+- Added `<SpeedInsights />` component within the StrictMode wrapper
+- Component placed after the main FruitList component to ensure proper initialization
+
+#### 3. Files Modified
+- `My-React-Website/package.json` - Added @vercel/speed-insights dependency
+- `My-React-Website/package-lock.json` - Updated with new dependencies
+- `My-React-Website/src/main.tsx` - Added SpeedInsights component
+
+### Implementation Approach
+Following the official Vercel documentation (fetched from https://vercel.com/docs/speed-insights/quickstart), the React/Vite-specific instructions were applied:
+- Used the `/react` export from `@vercel/speed-insights` package
+- Placed the component at the root level in main.tsx for app-wide coverage
+- No additional configuration required - the component works out of the box
+
+### Verification
+✅ Build successful: Project builds without errors using `npm run build`
+✅ TypeScript compilation: No TypeScript errors
+✅ Dependencies installed: All 253 packages successfully installed
+✅ Lock file updated: package-lock.json properly updated
+
+Note: Pre-existing linting errors were found in server files (server/db.js, server/index.js) but these are unrelated to the Speed Insights integration.
+
+### Next Steps for Deployment
+1. Deploy the application to Vercel
+2. Enable Speed Insights in the Vercel dashboard (Project Settings → Speed Insights → Enable)
+3. After deployment, the Speed Insights tracking will automatically collect performance metrics
+4. View metrics in the Vercel dashboard under Speed Insights section
+
+### Technical Notes
+- Speed Insights will only collect data in production environments
+- The component is lightweight and won't impact development performance
+- No additional configuration is needed - metrics are automatically sent to Vercel
+- The integration follows React/Vite best practices by placing the component at the root level
