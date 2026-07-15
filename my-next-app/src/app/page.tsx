@@ -49,7 +49,7 @@ export default function Home() {
               width={16}
               height={16}
             />
-            Deploy Now
+            Deploy Later
           </a>
           <a
             className={styles.secondary}
@@ -57,7 +57,7 @@ export default function Home() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Documentation
+            Docs
           </a>
         </div>
       </main>
