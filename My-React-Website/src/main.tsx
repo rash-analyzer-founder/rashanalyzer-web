@@ -1,9 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import FruitList from './list.tsx'
+import App from './Frontend.tsx'
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
-    <FruitList />
+    <App />
   </StrictMode>
 )
