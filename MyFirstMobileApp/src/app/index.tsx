@@ -1,1 +1,1 @@
-export { default } from '@/features/space/SpaceDashboardScreen';
+export { default } from '../features/space/SpaceDashboardScreen';
