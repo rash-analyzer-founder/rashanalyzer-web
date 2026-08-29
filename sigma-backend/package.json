@@ -1,16 +1,27 @@
 {
   "name": "sigma-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Local SQLite + Socket.io backend for the private lab workspace",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "echo \"No backend tests configured\""
   },
-  "keywords": [],
+  "keywords": [
+    "sqlite",
+    "socket.io",
+    "express",
+    "local-network"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "express": "^5.2.1"
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3",
+    "sqlite3": "^5.1.7"
   }
 }
