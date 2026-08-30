@@ -251,7 +251,7 @@ export default function SpaceDashboardScreen() {
 
             <View style={styles.sectionCard}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Channel directory</Text>
+                <Text style={styles.sectionTitle}>Channels</Text>
                 <Text style={styles.sectionMeta}>4 live</Text>
               </View>
               {channelSeed.map((channel) => (
