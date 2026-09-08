@@ -32,9 +32,160 @@ db.pragma('busy_timeout = 5000;');
 const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schemaSql);
 
+const additiveMigrations = [
+  'ALTER TABLE users ADD COLUMN bio TEXT',
+  'ALTER TABLE users ADD COLUMN banner_url TEXT',
+  'ALTER TABLE spaces ADD COLUMN icon_url TEXT',
+  'ALTER TABLE spaces ADD COLUMN banner_url TEXT',
+  "ALTER TABLE roles ADD COLUMN color TEXT NOT NULL DEFAULT '#6366F1'",
+  'ALTER TABLE roles ADD COLUMN can_manage_space INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE roles ADD COLUMN can_manage_roles INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE roles ADD COLUMN can_manage_channels INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE roles ADD COLUMN can_kick_members INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE roles ADD COLUMN can_ban_members INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE roles ADD COLUMN can_mute_members INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE roles ADD COLUMN can_dispatch_emergency_ping INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE roles ADD COLUMN mute_duration_seconds INTEGER',
+];
+for (const migration of additiveMigrations) {
+  try {
+    db.exec(migration);
+  } catch (error) {
+    if (!String(error.message).includes('duplicate column name')) throw error;
+  }
+}
+
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+app.post('/api/auth/signup', (req, res) => {
+  const { username, display_name, email, password, bio, avatar_url, banner_url } = req.body || {};
+  if (!username || !display_name || !email || !password) return res.status(400).json({ error: 'username, display_name, email, and password are required' });
+  const id = createUuid();
+  const passwordHash = crypto.scryptSync(password, SIGNING_SECRET, 64).toString('hex');
+  try {
+    db.prepare(`INSERT INTO users (id, username, email, password_hash, display_name, bio, avatar_url, banner_url, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(id, username, email, passwordHash, display_name, bio || null, avatar_url || null, banner_url || null);
+    return res.status(201).json({ user: db.prepare('SELECT id, username, email, display_name, bio, avatar_url, banner_url, xp, total_xp, is_cs_verified FROM users WHERE id = ?').get(id) });
+  } catch (error) {
+    return res.status(409).json({ error: 'Username or email already exists' });
+  }
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { identifier, password } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(identifier, identifier);
+  const passwordHash = user ? crypto.scryptSync(password || '', SIGNING_SECRET, 64).toString('hex') : '';
+  if (!user || !crypto.timingSafeEqual(Buffer.from(user.password_hash, 'hex'), Buffer.from(passwordHash, 'hex'))) return res.status(401).json({ error: 'Invalid credentials' });
+  return res.json({ user: { id: user.id, username: user.username, email: user.email, display_name: user.display_name, bio: user.bio, avatar_url: user.avatar_url, banner_url: user.banner_url, xp: user.xp, is_cs_verified: Boolean(user.is_cs_verified) } });
+});
+
+app.get('/api/users/search', (req, res) => {
+  const query = String(req.query.q || '').trim();
+  if (!query) return res.json({ users: [] });
+  const users = db.prepare(`SELECT id, username, display_name, bio, avatar_url, banner_url, xp, is_cs_verified
+    FROM users WHERE username LIKE ? OR display_name LIKE ? ORDER BY display_name LIMIT 25`).all(`%${query}%`, `%${query}%`);
+  return res.json({ users });
+});
+
+app.get('/api/spaces/:spaceId/screening', (req, res) => {
+  const questions = db.prepare('SELECT * FROM space_screening_questions WHERE space_id = ? ORDER BY step_order').all(req.params.spaceId);
+  const options = db.prepare(`SELECT o.* FROM space_screening_options o JOIN space_screening_questions q ON q.id = o.question_id WHERE q.space_id = ? ORDER BY o.created_at`).all(req.params.spaceId);
+  return res.json({ questions: questions.map((question) => ({ ...question, options: options.filter((option) => option.question_id === question.id) })) });
+});
+
+app.post('/api/spaces/:spaceId/screening/questions', (req, res) => {
+  if (!requireRestPermission(req, res, 'can_manage_space')) return;
+  const { question_text, step_order, options } = req.body || {};
+  if (!question_text || !Array.isArray(options) || options.length === 0) return res.status(400).json({ error: 'question_text and a non-empty options array are required' });
+  const questionId = createUuid();
+  const insert = db.transaction(() => {
+    db.prepare('INSERT INTO space_screening_questions (id, space_id, question_text, step_order) VALUES (?, ?, ?, ?)').run(questionId, req.params.spaceId, question_text, Number(step_order || 0));
+    const optionStmt = db.prepare('INSERT INTO space_screening_options (id, question_id, option_text, assigned_role_id) VALUES (?, ?, ?, ?)');
+    options.forEach((option) => optionStmt.run(createUuid(), questionId, option.option_text, option.assigned_role_id || null));
+  });
+  insert();
+  return res.status(201).json({ question_id: questionId });
+});
+
+app.post('/api/spaces/:spaceId/screening/submit', (req, res) => {
+  const { user_id, answers } = req.body || {};
+  if (!user_id || !Array.isArray(answers) || answers.length === 0) return res.status(400).json({ error: 'user_id and answers are required' });
+  const assign = db.transaction(() => {
+    const roles = new Set();
+    const answerStmt = db.prepare(`INSERT OR REPLACE INTO space_screening_answers (id, space_id, user_id, question_id, option_id) VALUES (?, ?, ?, ?, ?)`);
+    for (const answer of answers) {
+      const option = db.prepare(`SELECT o.*, q.space_id FROM space_screening_options o JOIN space_screening_questions q ON q.id = o.question_id WHERE o.id = ? AND q.space_id = ?`).get(answer.option_id, req.params.spaceId);
+      if (!option) throw new Error('Invalid screening option');
+      answerStmt.run(createUuid(), req.params.spaceId, user_id, option.question_id, option.id);
+      if (option.assigned_role_id) roles.add(option.assigned_role_id);
+    }
+    db.prepare(`INSERT INTO space_members (id, space_id, user_id, role_id, joined_at, is_active) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 1)
+      ON CONFLICT(space_id, user_id) DO UPDATE SET role_id = excluded.role_id, is_active = 1`).run(createUuid(), req.params.spaceId, user_id, [...roles][0] || null);
+    return [...roles];
+  });
+  try { return res.json({ ok: true, assigned_role_ids: assign() }); } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.post('/api/spaces/:spaceId/channels', (req, res) => {
+  if (!requireRestPermission(req, res, 'can_manage_channels')) return;
+  const { name, type, group_id, topic, allowed_role_ids = [] } = req.body || {};
+  if (!name || !['text', 'voice', 'video'].includes(type)) return res.status(400).json({ error: 'name and a valid channel type are required' });
+  if (group_id && !db.prepare('SELECT id FROM channel_groups WHERE id = ? AND space_id = ?').get(group_id, req.params.spaceId)) return res.status(400).json({ error: 'group_id does not belong to this space' });
+  if (db.prepare('SELECT id FROM channels WHERE space_id = ? AND name = ?').get(req.params.spaceId, name)) {
+    return res.status(409).json({ error: 'A channel with this name already exists in the space' });
+  }
+  const id = createUuid();
+  const createChannel = db.transaction(() => {
+    db.prepare('INSERT INTO channels (id, space_id, group_id, name, type, topic) VALUES (?, ?, ?, ?, ?, ?)').run(id, req.params.spaceId, group_id || null, name, type, topic || null);
+    const insertRole = db.prepare('INSERT INTO channel_allowed_roles (channel_id, role_id) VALUES (?, ?)');
+    allowed_role_ids.forEach((roleId) => insertRole.run(id, roleId));
+  });
+  try { createChannel(); broadcastSpaceChange(req.params.spaceId, 'channel_created', { channel_id: id }); return res.status(201).json({ channel: db.prepare('SELECT * FROM channels WHERE id = ?').get(id), allowed_role_ids }); } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.get('/api/spaces/:spaceId/channels/visible', (req, res) => {
+  const { user_id } = req.query;
+  const member = user_id ? db.prepare('SELECT role_id FROM space_members WHERE space_id = ? AND user_id = ? AND is_active = 1').get(req.params.spaceId, user_id) : null;
+  const channels = db.prepare(`SELECT c.*, GROUP_CONCAT(car.role_id) AS allowed_role_ids FROM channels c LEFT JOIN channel_allowed_roles car ON car.channel_id = c.id WHERE c.space_id = ? GROUP BY c.id ORDER BY c.created_at`).all(req.params.spaceId);
+  return res.json({ channels: channels
+    .filter((channel) => !channel.allowed_role_ids || (member && channel.allowed_role_ids.split(',').includes(member.role_id)))
+    .map((channel) => ({ ...channel, allowed_role_ids: channel.allowed_role_ids ? channel.allowed_role_ids.split(',') : [] })) });
+});
+
+app.get('/api/spaces/:spaceId/channel-groups', (req, res) => {
+  const groups = db.prepare('SELECT * FROM channel_groups WHERE space_id = ? ORDER BY sort_order, created_at').all(req.params.spaceId);
+  return res.json({ groups });
+});
+
+app.post('/api/spaces/:spaceId/channel-groups', (req, res) => {
+  if (!requireRestPermission(req, res, 'can_manage_channels')) return;
+  const { name, sort_order } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  try {
+    const id = createUuid();
+    db.prepare('INSERT INTO channel_groups (id, space_id, name, sort_order) VALUES (?, ?, ?, ?)').run(id, req.params.spaceId, name, Number(sort_order || 0));
+    broadcastSpaceChange(req.params.spaceId, 'channel_group_created', { group_id: id });
+    return res.status(201).json({ group: db.prepare('SELECT * FROM channel_groups WHERE id = ?').get(id) });
+  } catch (error) {
+    return res.status(409).json({ error: 'A channel group with this name already exists in the space' });
+  }
+});
+
+app.get('/api/dms/:userId/:peerId', (req, res) => {
+  const messages = db.prepare(`SELECT * FROM direct_messages WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?) ORDER BY created_at ASC`).all(req.params.userId, req.params.peerId, req.params.peerId, req.params.userId);
+  return res.json({ messages });
+});
+
+app.get('/api/channels/:channelId/messages', (req, res) => {
+  const channel = db.prepare('SELECT space_id FROM channels WHERE id = ?').get(req.params.channelId);
+  if (!channel || !hasSpacePermission(channel.space_id, req.query.user_id, 'can_manage_space') && !db.prepare('SELECT 1 FROM space_members WHERE space_id = ? AND user_id = ? AND is_active = 1').get(channel?.space_id, req.query.user_id)) {
+    return res.status(403).json({ error: 'Channel access requires active space membership' });
+  }
+  const messages = db.prepare('SELECT * FROM channel_messages WHERE channel_id = ? ORDER BY created_at ASC LIMIT 200').all(req.params.channelId);
+  return res.json({ messages });
+});
 
 const createUuid = () => crypto.randomUUID();
 const secureToken = () => crypto.randomBytes(24).toString('hex');
@@ -49,6 +200,15 @@ function signedEnvelope(payload) {
     ...payload,
     signature: signPayload(payload),
   };
+}
+
+function broadcastSpaceChange(spaceId, type, data = {}) {
+  io.to(`space:${spaceId}`).emit('space:broadcast', signedEnvelope({
+    space_id: spaceId,
+    type,
+    data,
+    sent_at: new Date().toISOString(),
+  }));
 }
 
 function titleCase(value) {
@@ -70,6 +230,71 @@ function toJson(value, fallback = {}) {
     return fallback;
   }
 }
+
+function normalizeBoolean(value) {
+  return value === true || value === 1 || value === '1' ? 1 : 0;
+}
+
+function getTask(taskId) {
+  return db.prepare(`
+    SELECT t.*, e.space_id
+    FROM event_tasks t
+    JOIN space_events e ON e.id = t.event_id
+    WHERE t.id = ?
+  `).get(taskId);
+}
+
+function getMemberPermissions(spaceId, userId) {
+  const row = db.prepare(`
+    SELECT r.* FROM space_members m
+    JOIN roles r ON r.id = m.role_id
+    WHERE m.space_id = ? AND m.user_id = ? AND m.is_active = 1
+  `).get(spaceId, userId);
+  return row || {};
+}
+
+function hasSpacePermission(spaceId, userId, permission) {
+  if (!spaceId || !userId) return false;
+  return Boolean(getMemberPermissions(spaceId, userId)[permission]);
+}
+
+function requireRestPermission(req, res, permission) {
+  const actorId = req.body?.actor_id || req.body?.user_id || req.body?.created_by || req.body?.creator_id;
+  if (!hasSpacePermission(req.params.spaceId, actorId, permission)) {
+    res.status(403).json({ error: `Missing permission: ${permission}` });
+    return false;
+  }
+  return true;
+}
+
+function ensureSpaceOwners() {
+  const ownerRole = db.prepare(`
+    INSERT INTO roles (
+      id, space_id, name, priority_level, color, can_manage_space, can_manage_roles,
+      can_manage_channels, can_manage_tasks, can_manage_events, can_manage_bots,
+      can_kick, can_kick_members, can_ban_members, can_mute_members,
+      can_dispatch_emergency_ping, is_default, created_at
+    ) VALUES (?, ?, 'Owner', 0, '#EF4444', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, CURRENT_TIMESTAMP)
+    ON CONFLICT(space_id, name) DO UPDATE SET
+      priority_level = 0, can_manage_space = 1, can_manage_roles = 1,
+      can_manage_channels = 1, can_manage_tasks = 1, can_manage_events = 1,
+      can_manage_bots = 1, can_kick = 1, can_kick_members = 1,
+      can_ban_members = 1, can_mute_members = 1, can_dispatch_emergency_ping = 1
+  `);
+  const assignOwner = db.prepare(`
+    UPDATE space_members SET role_id = (SELECT id FROM roles WHERE space_id = ? AND name = 'Owner')
+    WHERE space_id = ? AND user_id = (SELECT created_by FROM spaces WHERE id = ?)
+  `);
+  const sync = db.transaction(() => {
+    for (const space of db.prepare('SELECT id FROM spaces').all()) {
+      ownerRole.run(createUuid(), space.id);
+      assignOwner.run(space.id, space.id, space.id);
+    }
+  });
+  sync();
+}
+
+ensureSpaceOwners();
 
 function defaultPermissionsForRole(name) {
   const normalized = String(name || '').toLowerCase();
@@ -203,7 +428,7 @@ app.get('/api/spaces', (req, res) => {
 });
 
 app.post('/api/spaces', (req, res) => {
-  const { name, description, theme_color, created_by, is_private, xp_stake_pool } = req.body || {};
+  const { name, description, theme_color, icon_url, banner_url, created_by, is_private, xp_stake_pool } = req.body || {};
   if (!name || !created_by) {
     return res.status(400).json({ error: 'name and created_by are required' });
   }
@@ -215,8 +440,8 @@ app.post('/api/spaces', (req, res) => {
   const uniqueSlug = existing ? `${slug}-${Date.now()}` : slug;
 
   const insertSpace = db.prepare(`
-    INSERT INTO spaces (id, name, slug, description, theme_color, is_private, xp_stake_pool, bandwidth_limit_mb, storage_quota_mb, created_by, created_at, updated_at)
-    VALUES (@id, @name, @slug, @description, @theme_color, @is_private, @xp_stake_pool, 1024, 4096, @created_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    INSERT INTO spaces (id, name, slug, description, theme_color, icon_url, banner_url, is_private, xp_stake_pool, bandwidth_limit_mb, storage_quota_mb, created_by, created_at, updated_at)
+    VALUES (@id, @name, @slug, @description, @theme_color, @icon_url, @banner_url, @is_private, @xp_stake_pool, 1024, 4096, @created_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `);
   insertSpace.run({
     id,
@@ -224,6 +449,8 @@ app.post('/api/spaces', (req, res) => {
     slug: uniqueSlug,
     description: description || null,
     theme_color: theme_color || '#4F46E5',
+    icon_url: icon_url || null,
+    banner_url: banner_url || null,
     is_private: Number(Boolean(is_private)) ? 1 : 0,
     xp_stake_pool: Number(xp_stake_pool || 0),
     created_by,
@@ -235,25 +462,21 @@ app.post('/api/spaces', (req, res) => {
     VALUES (@id, @space_id, @user_id, @role_id, CURRENT_TIMESTAMP, 0, 1024, 2048, 1)
   `).run({ id: memberId, space_id: id, user_id: created_by, role_id: null });
 
+  const everyoneRoleId = createUuid();
+  db.prepare(`
+    INSERT INTO roles (id, space_id, name, priority_level, can_manage_tasks, can_manage_events, can_manage_bots, can_kick, is_default, created_at)
+    VALUES (@id, @space_id, @name, 999, 0, 0, 0, 0, 1, CURRENT_TIMESTAMP)
+  `).run({ id: everyoneRoleId, space_id: id, name: '@everyone' });
   const ownerRoleId = createUuid();
   db.prepare(`
-    INSERT INTO roles (id, space_id, name, priority_level, can_manage_tasks, can_manage_events, can_manage_bots, can_kick, is_default, created_at)
-    VALUES (@id, @space_id, @name, 1, 1, 1, 1, 1, 1, CURRENT_TIMESTAMP)
-  `).run({ id: ownerRoleId, space_id: id, name: 'Owner' });
-
+    INSERT INTO roles (
+      id, space_id, name, priority_level, color, can_manage_space, can_manage_roles,
+      can_manage_channels, can_manage_tasks, can_manage_events, can_manage_bots,
+      can_kick, can_kick_members, can_ban_members, can_mute_members,
+      can_dispatch_emergency_ping, is_default, created_at
+    ) VALUES (?, ?, 'Owner', 0, '#EF4444', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, CURRENT_TIMESTAMP)
+  `).run(ownerRoleId, id);
   db.prepare('UPDATE space_members SET role_id = ? WHERE space_id = ? AND user_id = ?').run(ownerRoleId, id, created_by);
-
-  const supervisorRoleId = createUuid();
-  db.prepare(`
-    INSERT INTO roles (id, space_id, name, priority_level, can_manage_tasks, can_manage_events, can_manage_bots, can_kick, is_default, created_at)
-    VALUES (@id, @space_id, @name, 3, 1, 1, 0, 0, 0, CURRENT_TIMESTAMP)
-  `).run({ id: supervisorRoleId, space_id: id, name: 'Supervisor' });
-
-  const memberRoleId = createUuid();
-  db.prepare(`
-    INSERT INTO roles (id, space_id, name, priority_level, can_manage_tasks, can_manage_events, can_manage_bots, can_kick, is_default, created_at)
-    VALUES (@id, @space_id, @name, 10, 0, 0, 0, 0, 1, CURRENT_TIMESTAMP)
-  `).run({ id: memberRoleId, space_id: id, name: 'Member' });
 
   const space = db.prepare('SELECT * FROM spaces WHERE id = ?').get(id);
   const roles = db.prepare('SELECT * FROM roles WHERE space_id = ? ORDER BY priority_level ASC').all(id);
@@ -277,42 +500,59 @@ app.get('/api/spaces/:spaceId', (req, res) => {
 
   const roles = db.prepare('SELECT * FROM roles WHERE space_id = ? ORDER BY priority_level ASC').all(req.params.spaceId);
   const members = db.prepare('SELECT * FROM space_members WHERE space_id = ?').all(req.params.spaceId);
-  const channels = db.prepare('SELECT * FROM channels WHERE space_id = ? ORDER BY created_at DESC').all(req.params.spaceId);
+  const member = req.query.user_id ? db.prepare('SELECT role_id FROM space_members WHERE space_id = ? AND user_id = ? AND is_active = 1').get(req.params.spaceId, req.query.user_id) : null;
+  const channels = db.prepare('SELECT c.*, GROUP_CONCAT(car.role_id) AS allowed_role_ids FROM channels c LEFT JOIN channel_allowed_roles car ON car.channel_id = c.id WHERE c.space_id = ? GROUP BY c.id ORDER BY c.created_at DESC').all(req.params.spaceId)
+    .filter((channel) => !channel.allowed_role_ids || (member && channel.allowed_role_ids.split(',').includes(member.role_id)))
+    .map((channel) => ({ ...channel, allowed_role_ids: channel.allowed_role_ids ? channel.allowed_role_ids.split(',') : [] }));
   const events = db.prepare('SELECT * FROM space_events WHERE space_id = ? ORDER BY start_at DESC').all(req.params.spaceId);
+  const tasks = db.prepare(`SELECT t.*, e.space_id FROM event_tasks t JOIN space_events e ON e.id = t.event_id WHERE e.space_id = ? ORDER BY t.updated_at DESC`).all(req.params.spaceId);
 
-  res.json({ space, roles, members, channels, events });
+  const groups = db.prepare('SELECT * FROM channel_groups WHERE space_id = ? ORDER BY sort_order, created_at').all(req.params.spaceId);
+  res.json({ space, roles, members, channels, groups, events, tasks });
 });
 
 app.post('/api/spaces/:spaceId/roles', (req, res) => {
-  const { name, priority_level, can_manage_tasks, can_manage_events, can_manage_bots, can_kick } = req.body || {};
+  if (!requireRestPermission(req, res, 'can_manage_roles')) return;
+  const { name, color, priority_level, mute_duration_seconds, ...permissions } = req.body || {};
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   const id = createUuid();
-  const defaults = defaultPermissionsForRole(name);
   const roleRow = {
     id,
     space_id: req.params.spaceId,
     name: titleCase(name),
     priority_level: Number(priority_level ?? 99),
-    can_manage_tasks: Number(Boolean(can_manage_tasks ?? defaults.can_manage_tasks)),
-    can_manage_events: Number(Boolean(can_manage_events ?? defaults.can_manage_events)),
-    can_manage_bots: Number(Boolean(can_manage_bots ?? defaults.can_manage_bots)),
-    can_kick: Number(Boolean(can_kick ?? defaults.can_kick)),
+    color: color || '#6366F1',
+    can_manage_space: normalizeBoolean(permissions.can_manage_space),
+    can_manage_roles: normalizeBoolean(permissions.can_manage_roles),
+    can_manage_channels: normalizeBoolean(permissions.can_manage_channels),
+    can_manage_tasks: normalizeBoolean(permissions.can_manage_tasks),
+    can_manage_events: normalizeBoolean(permissions.can_manage_events),
+    can_manage_bots: normalizeBoolean(permissions.can_manage_bots),
+    can_kick: normalizeBoolean(permissions.can_kick),
+    can_kick_members: normalizeBoolean(permissions.can_kick_members),
+    can_ban_members: normalizeBoolean(permissions.can_ban_members),
+    can_mute_members: normalizeBoolean(permissions.can_mute_members),
+    can_dispatch_emergency_ping: normalizeBoolean(permissions.can_dispatch_emergency_ping),
+    mute_duration_seconds: mute_duration_seconds ? Number(mute_duration_seconds) : null,
     is_default: 0,
   };
 
   const stmt = db.prepare(`
-    INSERT INTO roles (id, space_id, name, priority_level, can_manage_tasks, can_manage_events, can_manage_bots, can_kick, is_default, created_at)
-    VALUES (@id, @space_id, @name, @priority_level, @can_manage_tasks, @can_manage_events, @can_manage_bots, @can_kick, @is_default, CURRENT_TIMESTAMP)
+    INSERT INTO roles (id, space_id, name, priority_level, color, can_manage_space, can_manage_roles, can_manage_channels, can_manage_tasks, can_manage_events, can_manage_bots, can_kick, can_kick_members, can_ban_members, can_mute_members, can_dispatch_emergency_ping, mute_duration_seconds, is_default, created_at)
+    VALUES (@id, @space_id, @name, @priority_level, @color, @can_manage_space, @can_manage_roles, @can_manage_channels, @can_manage_tasks, @can_manage_events, @can_manage_bots, @can_kick, @can_kick_members, @can_ban_members, @can_mute_members, @can_dispatch_emergency_ping, @mute_duration_seconds, @is_default, CURRENT_TIMESTAMP)
   `);
   stmt.run(roleRow);
+
+  broadcastSpaceChange(req.params.spaceId, 'role_created', { role_id: id });
 
   res.status(201).json({ role: roleRow });
 });
 
 app.post('/api/spaces/:spaceId/members', (req, res) => {
-  const { user_id, role_id } = req.body || {};
+  const { user_id, role_id, actor_id } = req.body || {};
   if (!user_id) return res.status(400).json({ error: 'user_id is required' });
+  if (!hasSpacePermission(req.params.spaceId, actor_id, 'can_manage_space')) return res.status(403).json({ error: 'Missing permission: can_manage_space' });
 
   const existing = db.prepare('SELECT id FROM space_members WHERE space_id = ? AND user_id = ?').get(req.params.spaceId, user_id);
   if (existing) {
@@ -326,10 +566,13 @@ app.post('/api/spaces/:spaceId/members', (req, res) => {
     VALUES (@id, @space_id, @user_id, @role_id, CURRENT_TIMESTAMP, 0, 1024, 2048, 1)
   `).run({ id, space_id: req.params.spaceId, user_id, role_id: role_id || null });
 
+  broadcastSpaceChange(req.params.spaceId, 'member_added', { user_id, role_id: role_id || null });
+
   res.status(201).json({ ok: true, member_id: id });
 });
 
 app.post('/api/spaces/:spaceId/events', (req, res) => {
+  if (!requireRestPermission(req, res, 'can_manage_events')) return;
   const { creator_id, title, description, event_type, is_virtual, location, start_at, end_at } = req.body || {};
   if (!creator_id || !title || !event_type || !start_at) {
     return res.status(400).json({ error: 'creator_id, title, event_type, and start_at are required' });
@@ -352,10 +595,13 @@ app.post('/api/spaces/:spaceId/events', (req, res) => {
     end_at: end_at || null,
   });
 
+  broadcastSpaceChange(req.params.spaceId, 'event_created', { event_id: id });
+
   res.status(201).json({ event_id: id });
 });
 
 app.post('/api/spaces/:spaceId/tasks', (req, res) => {
+  if (!requireRestPermission(req, res, 'can_manage_tasks')) return;
   const { event_id, created_by, title, description, assignee_user_id, assignee_role_id, due_at, proof_required } = req.body || {};
   if (!event_id || !created_by || !title) {
     return res.status(400).json({ error: 'event_id, created_by, and title are required' });
@@ -378,6 +624,8 @@ app.post('/api/spaces/:spaceId/tasks', (req, res) => {
     proof_required: Number(Boolean(proof_required !== false)) ? 1 : 0,
   });
 
+  broadcastSpaceChange(req.params.spaceId, 'task_created', { task_id: taskId });
+
   const task = db.prepare('SELECT * FROM event_tasks WHERE id = ?').get(taskId);
   res.status(201).json({ task });
 });
@@ -390,6 +638,7 @@ app.post('/api/tasks/:taskId/assign', (req, res) => {
 
   const task = db.prepare('SELECT * FROM event_tasks WHERE id = ?').get(req.params.taskId);
   if (!task) return res.status(404).json({ error: 'Task not found' });
+  if (!hasSpacePermission(task.space_id, actor_id, 'can_manage_tasks')) return res.status(403).json({ error: 'Missing permission: can_manage_tasks' });
 
   db.prepare(`
     UPDATE event_tasks
@@ -464,6 +713,7 @@ app.post('/api/bots/register', (req, res) => {
   if (!space_id || !bot_name || !webhook_url || !owner_user_id) {
     return res.status(400).json({ error: 'space_id, bot_name, webhook_url, and owner_user_id are required' });
   }
+  if (!hasSpacePermission(space_id, owner_user_id, 'can_manage_bots')) return res.status(403).json({ error: 'Missing permission: can_manage_bots' });
 
   const botId = createUuid();
   const verificationToken = secureToken();
@@ -532,14 +782,82 @@ app.get('/api/bots/verify', (req, res) => {
 
 io.on('connection', (socket) => {
   socket.on('join:space', (payload = {}) => {
-    const { space_id } = payload;
+    const { space_id, user_id } = payload;
     if (!space_id) {
       socket.emit('error', { type: 'validation', message: 'space_id is required' });
       return;
     }
+    if (!user_id || !db.prepare('SELECT 1 FROM space_members WHERE space_id = ? AND user_id = ? AND is_active = 1').get(space_id, user_id)) {
+      socket.emit('error', { type: 'forbidden', message: 'You are not an active member of this space' });
+      return;
+    }
     socket.join(`space:${space_id}`);
     socket.data.space_id = space_id;
+    socket.data.user_id = user_id;
+    socket.data.permissions = getMemberPermissions(space_id, user_id);
+    if (user_id) socket.join(`user:${user_id}`);
     socket.emit('joined:space', { space_id, connected: true });
+  });
+
+  socket.on('join:channel', (payload = {}) => {
+    const { channel_id, user_id } = payload;
+    const channel = db.prepare('SELECT * FROM channels WHERE id = ?').get(channel_id);
+    if (!channel) return socket.emit('error', { type: 'not_found', message: 'Channel not found' });
+    if (!user_id || !db.prepare('SELECT 1 FROM space_members WHERE space_id = ? AND user_id = ? AND is_active = 1').get(channel.space_id, user_id)) {
+      return socket.emit('error', { type: 'forbidden', message: 'You are not an active member of this space' });
+    }
+    const role = db.prepare('SELECT role_id FROM space_members WHERE space_id = ? AND user_id = ? AND is_active = 1').get(channel.space_id, user_id);
+    const allowed = db.prepare('SELECT 1 FROM channel_allowed_roles WHERE channel_id = ? LIMIT 1').get(channel_id);
+    if (allowed && !db.prepare('SELECT 1 FROM channel_allowed_roles WHERE channel_id = ? AND role_id = ?').get(channel_id, role?.role_id)) {
+      return socket.emit('error', { type: 'forbidden', message: 'Your role cannot access this channel' });
+    }
+    socket.join(`channel:${channel_id}`);
+    socket.data.user_id = user_id;
+    socket.data.space_id = channel.space_id;
+    socket.emit('joined:channel', { channel_id, space_id: channel.space_id });
+  });
+
+  socket.on('channel:send_message', (payload = {}) => {
+    const { channel_id, sender_id, body, attachment_url } = payload;
+    const channel = db.prepare('SELECT * FROM channels WHERE id = ?').get(channel_id);
+    if (!channel || !body && !attachment_url || socket.data.user_id !== sender_id) {
+      return socket.emit('error', { type: 'validation', message: 'Valid channel, sender, and message content are required' });
+    }
+    if (!socket.rooms.has(`channel:${channel_id}`)) return socket.emit('error', { type: 'forbidden', message: 'Join this channel before sending messages' });
+    const id = createUuid();
+    db.prepare('INSERT INTO channel_messages (id, channel_id, sender_id, body, attachment_url) VALUES (?, ?, ?, ?, ?)').run(id, channel_id, sender_id, body || null, attachment_url || null);
+    const message = db.prepare('SELECT * FROM channel_messages WHERE id = ?').get(id);
+    io.to(`channel:${channel_id}`).emit('channel:message', message);
+  });
+
+  socket.on('join:voice', (payload = {}) => {
+    const { channel_id, user_id } = payload;
+    const channel = db.prepare("SELECT * FROM channels WHERE id = ? AND type = 'voice'").get(channel_id);
+    if (!channel || socket.data.user_id !== user_id || !socket.rooms.has(`channel:${channel_id}`)) return socket.emit('error', { type: 'forbidden', message: 'Join a voice channel as an authenticated member first' });
+    socket.join(`voice:${channel_id}`);
+    io.to(`voice:${channel_id}`).emit('voice:presence', { channel_id, user_id, active: true });
+  });
+
+  socket.on('leave:voice', (payload = {}) => {
+    const { channel_id, user_id } = payload;
+    socket.leave(`voice:${channel_id}`);
+    io.to(`voice:${channel_id}`).emit('voice:presence', { channel_id, user_id, active: false });
+  });
+
+  socket.on('dm:send', (payload = {}) => {
+    const { sender_id, receiver_id, body, attachment_url } = payload;
+    if (!sender_id || !receiver_id || (!body && !attachment_url)) return socket.emit('error', { type: 'validation', message: 'sender_id, receiver_id, and body or attachment_url are required' });
+    if (socket.data.user_id !== sender_id) return socket.emit('error', { type: 'forbidden', message: 'Sender identity does not match the connected user' });
+    const id = createUuid();
+    db.prepare('INSERT INTO direct_messages (id, sender_id, receiver_id, body, attachment_url, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)').run(id, sender_id, receiver_id, body || null, attachment_url || null);
+    const message = db.prepare('SELECT * FROM direct_messages WHERE id = ?').get(id);
+    io.to(`user:${sender_id}`).to(`user:${receiver_id}`).emit('dm:message', message);
+    const mentionPattern = /((?:!!|!)?@|s@)([a-zA-Z0-9_.-]+)/g;
+    for (const match of String(body || '').matchAll(mentionPattern)) {
+      const level = match[1] === 's@' ? 0 : match[1] === '@' ? 1 : match[1] === '!@' ? 2 : 3;
+      const target = db.prepare('SELECT id FROM users WHERE username = ?').get(match[2]);
+      if (target) dispatchPing({ targetUserId: target.id, createdBy: sender_id, pingLevel: level, category: 'manual', title: `Mention from ${sender_id}`, message: body, payloadJson: { message_id: id, mention: match[0] } });
+    }
   });
 
   socket.on('task:assign', (payload = {}) => {
@@ -589,6 +907,7 @@ io.on('connection', (socket) => {
       socket.emit('error', { type: 'not_found', message: 'Task not found' });
       return;
     }
+    if (task.assignee_user_id !== socket.data.user_id && !requirePermission(socket, 'can_manage_tasks')) return;
 
     const previousStatus = task.status;
     db.prepare(`UPDATE event_tasks SET status = @new_status, updated_at = CURRENT_TIMESTAMP WHERE id = @task_id`).run({
@@ -613,6 +932,11 @@ io.on('connection', (socket) => {
       socket.emit('error', { type: 'not_found', message: 'Task not found' });
       return;
     }
+    if (socket.data.user_id !== user_id) {
+      socket.emit('error', { type: 'forbidden', message: 'Submitter identity does not match the connected user' });
+      return;
+    }
+    if (task.assignee_user_id && task.assignee_user_id !== user_id && !requirePermission(socket, 'can_manage_tasks')) return;
 
     const proofId = createUuid();
     db.prepare(`INSERT INTO task_proofs (id, task_id, submitted_by, text_note, status, created_at) VALUES (@id, @task_id, @submitted_by, @text_note, 'pending', CURRENT_TIMESTAMP)`).run({
@@ -648,6 +972,15 @@ io.on('connection', (socket) => {
       socket.emit('error', { type: 'validation', message: 'created_by, title, category, and ping_level are required' });
       return;
     }
+    if (space_id && (!socket.data.user_id || socket.data.space_id !== space_id)) {
+      socket.emit('error', { type: 'forbidden', message: 'Join the target space before dispatching a ping' });
+      return;
+    }
+    if (socket.data.user_id !== created_by) {
+      socket.emit('error', { type: 'forbidden', message: 'Creator identity does not match the connected user' });
+      return;
+    }
+    if (Number(ping_level) >= 3 && !requirePermission(socket, 'can_dispatch_emergency_ping')) return;
 
     const dispatched = dispatchPing({
       spaceId: space_id || null,
@@ -698,6 +1031,7 @@ io.on('connection', (socket) => {
       socket.emit('error', { type: 'validation', message: 'space_id, bot_name, webhook_url, and owner_user_id are required' });
       return;
     }
+    if (socket.data.user_id !== owner_user_id || socket.data.space_id !== space_id || !requirePermission(socket, 'can_manage_bots')) return;
 
     const verificationToken = secureToken();
     const botId = createUuid();

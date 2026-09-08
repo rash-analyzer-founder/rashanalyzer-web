@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   display_name TEXT NOT NULL,
+  bio TEXT,
   avatar_url TEXT,
+  banner_url TEXT,
   xp INTEGER NOT NULL DEFAULT 0,
   total_xp INTEGER NOT NULL DEFAULT 0,
   local_rank INTEGER NOT NULL DEFAULT 0,
@@ -25,6 +27,8 @@ CREATE TABLE IF NOT EXISTS spaces (
   slug TEXT NOT NULL UNIQUE,
   description TEXT,
   theme_color TEXT,
+  icon_url TEXT,
+  banner_url TEXT,
   is_private INTEGER NOT NULL DEFAULT 0 CHECK (is_private IN (0, 1)),
   xp_stake_pool INTEGER NOT NULL DEFAULT 0,
   bandwidth_limit_mb INTEGER NOT NULL DEFAULT 1024,
@@ -44,6 +48,15 @@ CREATE TABLE IF NOT EXISTS roles (
   can_manage_events INTEGER NOT NULL DEFAULT 0 CHECK (can_manage_events IN (0, 1)),
   can_manage_bots INTEGER NOT NULL DEFAULT 0 CHECK (can_manage_bots IN (0, 1)),
   can_kick INTEGER NOT NULL DEFAULT 0 CHECK (can_kick IN (0, 1)),
+  color TEXT NOT NULL DEFAULT '#6366F1',
+  can_manage_space INTEGER NOT NULL DEFAULT 0 CHECK (can_manage_space IN (0, 1)),
+  can_manage_roles INTEGER NOT NULL DEFAULT 0 CHECK (can_manage_roles IN (0, 1)),
+  can_manage_channels INTEGER NOT NULL DEFAULT 0 CHECK (can_manage_channels IN (0, 1)),
+  can_kick_members INTEGER NOT NULL DEFAULT 0 CHECK (can_kick_members IN (0, 1)),
+  can_ban_members INTEGER NOT NULL DEFAULT 0 CHECK (can_ban_members IN (0, 1)),
+  can_mute_members INTEGER NOT NULL DEFAULT 0 CHECK (can_mute_members IN (0, 1)),
+  can_dispatch_emergency_ping INTEGER NOT NULL DEFAULT 0 CHECK (can_dispatch_emergency_ping IN (0, 1)),
+  mute_duration_seconds INTEGER,
   is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(space_id, name),
@@ -90,6 +103,71 @@ CREATE TABLE IF NOT EXISTS channels (
   FOREIGN KEY (group_id) REFERENCES channel_groups(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS channel_allowed_roles (
+  channel_id TEXT NOT NULL,
+  role_id TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (channel_id, role_id),
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+  FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS channel_groups (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(space_id, name),
+  FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS space_screening_questions (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  question_text TEXT NOT NULL,
+  step_order INTEGER NOT NULL CHECK (step_order >= 0),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(space_id, step_order),
+  FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS space_screening_options (
+  id TEXT PRIMARY KEY,
+  question_id TEXT NOT NULL,
+  option_text TEXT NOT NULL,
+  assigned_role_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (question_id) REFERENCES space_screening_questions(id) ON DELETE CASCADE,
+  FOREIGN KEY (assigned_role_id) REFERENCES roles(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS space_screening_answers (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  question_id TEXT NOT NULL,
+  option_id TEXT NOT NULL,
+  submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(space_id, user_id, question_id),
+  FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (question_id) REFERENCES space_screening_questions(id) ON DELETE CASCADE,
+  FOREIGN KEY (option_id) REFERENCES space_screening_options(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS space_invites (
+  token TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  expires_at TEXT,
+  used_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (space_id) REFERENCES spaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS direct_messages (
   id TEXT PRIMARY KEY,
   sender_id TEXT NOT NULL,
@@ -100,6 +178,17 @@ CREATE TABLE IF NOT EXISTS direct_messages (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS channel_messages (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  body TEXT,
+  attachment_url TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+  FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS space_events (
@@ -217,6 +306,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_event_status ON event_tasks(event_id, statu
 CREATE INDEX IF NOT EXISTS idx_task_proofs_task ON task_proofs(task_id, status);
 CREATE INDEX IF NOT EXISTS idx_pings_target_created ON pings(target_user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_space_bots_verification ON space_bots(verification_token, is_verified);
+CREATE INDEX IF NOT EXISTS idx_screening_questions_space ON space_screening_questions(space_id, step_order);
+CREATE INDEX IF NOT EXISTS idx_screening_options_question ON space_screening_options(question_id);
+CREATE INDEX IF NOT EXISTS idx_channel_allowed_roles_role ON channel_allowed_roles(role_id, channel_id);
+CREATE INDEX IF NOT EXISTS idx_channel_groups_space_order ON channel_groups(space_id, sort_order, created_at);
+CREATE INDEX IF NOT EXISTS idx_direct_messages_pair ON direct_messages(sender_id, receiver_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_channel_messages_history ON channel_messages(channel_id, created_at ASC);
 
 CREATE VIEW IF NOT EXISTS task_assignments AS
 SELECT

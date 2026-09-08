@@ -1,950 +1,118 @@
-import React, { useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useSpaceSocket } from './useSpaceSocket';
-import type { PingLevel, PingPayload, SpaceRole, SpaceTask, TaskStatus } from './space.types';
+import type { Channel, ChannelGroup, DirectMessage, PingLevel, PingPayload, SpaceRole, SpaceTask, TaskStatus, UserSummary } from './space.types';
 
-const mockRoles: SpaceRole[] = [
-  {
-    id: 'role-ops',
-    name: 'Operator',
-    priority_level: 1,
-    can_manage_tasks: true,
-    can_manage_events: false,
-    can_manage_bots: false,
-    can_kick: false,
-  },
-  {
-    id: 'role-supervisor',
-    name: 'Supervisor',
-    priority_level: 2,
-    can_manage_tasks: true,
-    can_manage_events: true,
-    can_manage_bots: true,
-    can_kick: true,
-  },
-  {
-    id: 'role-member',
-    name: 'Member',
-    priority_level: 3,
-    can_manage_tasks: false,
-    can_manage_events: false,
-    can_manage_bots: false,
-    can_kick: false,
-  },
-];
-
-const mockTasks: SpaceTask[] = [
-  {
-    id: 'task-1',
-    event_id: 'event-1',
-    title: 'Inspect Solvothermal Step',
-    description: 'Verify pressure and solution balance.',
-    status: 'pending',
-    assignee_user_id: 'user-1',
-    proof_required: true,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'task-2',
-    event_id: 'event-1',
-    title: 'Review Material Batch',
-    description: 'Check sample integrity and log metrics.',
-    status: 'assigned',
-    assignee_user_id: 'user-2',
-    proof_required: true,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'task-3',
-    event_id: 'event-1',
-    title: 'Run Spectral Check',
-    description: 'Validate baseline output before handoff.',
-    status: 'in_progress',
-    assignee_user_id: 'user-3',
-    proof_required: true,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'task-4',
-    event_id: 'event-1',
-    title: 'Submit Progress Proof',
-    description: 'Attach notes and dataset screenshot.',
-    status: 'submitted',
-    assignee_user_id: 'user-4',
-    proof_required: true,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: 'task-5',
-    event_id: 'event-1',
-    title: 'Approve Final Signoff',
-    description: 'Supervisor acceptance and release.',
-    status: 'approved',
-    assignee_user_id: 'user-5',
-    proof_required: false,
-    updated_at: new Date().toISOString(),
-  },
-];
-
-const channelSeed = [
-  { id: 'ch-1', name: 'lab-ops', type: 'text', active: true },
-  { id: 'ch-2', name: 'safety-brief', type: 'voice', active: true },
-  { id: 'ch-3', name: 'demo-room', type: 'video', active: false },
-  { id: 'ch-4', name: 'method-notes', type: 'text', active: true },
-];
-
-const pingMeta: Record<PingLevel, { label: string; accent: string; chip: string; note: string }> = {
-  0: { label: 'Meh', accent: '#6366F1', chip: '#1E293B', note: 'Quiet update' },
-  1: { label: 'Normal', accent: '#F59E0B', chip: '#2C1A00', note: 'Task update' },
-  2: { label: 'Urgent', accent: '#6366F1', chip: '#211B4C', note: 'Role or bot action' },
-  3: { label: 'Emergency', accent: '#EF4444', chip: '#3B0C0C', note: 'Override active' },
+const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+const currentUserId = process.env.EXPO_PUBLIC_USER_ID || '';
+const taskStatuses: TaskStatus[] = ['pending', 'assigned', 'in_progress', 'submitted', 'approved', 'rejected', 'blocked'];
+const permissionKeys = ['can_manage_space', 'can_manage_roles', 'can_manage_channels', 'can_manage_tasks', 'can_manage_bots', 'can_kick_members', 'can_ban_members', 'can_mute_members', 'can_dispatch_emergency_ping'] as const;
+const permissionLabels: Record<typeof permissionKeys[number], string> = {
+  can_manage_space: 'Manage Space', can_manage_roles: 'Manage Roles', can_manage_channels: 'Manage Channels', can_manage_tasks: 'Manage Tasks', can_manage_bots: 'Configure CS Bots', can_kick_members: 'Kick Members', can_ban_members: 'Ban Members', can_mute_members: 'Mute Members', can_dispatch_emergency_ping: 'Emergency Level 3 Pings',
 };
+const pingMeta: Record<PingLevel, { label: string; accent: string }> = { 0: { label: 'Meh', accent: '#6366F1' }, 1: { label: 'Normal', accent: '#F59E0B' }, 2: { label: 'Urgent', accent: '#A78BFA' }, 3: { label: 'Emergency', accent: '#EF4444' } };
 
-const statusStyles: Record<TaskStatus, { chip: string; text: string; dot: string }> = {
-  pending: { chip: '#1E293B', text: '#E2E8F0', dot: '#94A3B8' },
-  assigned: { chip: '#1E293B', text: '#C4B5FD', dot: '#8B5CF6' },
-  in_progress: { chip: '#2C1A00', text: '#FBBF24', dot: '#F59E0B' },
-  submitted: { chip: '#0F172A', text: '#A7F3D0', dot: '#10B981' },
-  approved: { chip: '#052E2B', text: '#6EE7B7', dot: '#10B981' },
-  rejected: { chip: '#3F1D1D', text: '#FCA5A5', dot: '#EF4444' },
-  blocked: { chip: '#3B0C0C', text: '#FCA5A5', dot: '#EF4444' },
-};
+type ModalKind = 'space' | 'channel' | 'role' | 'task' | 'event' | null;
+type SpaceRecord = { id: string; name: string; description?: string; icon_url?: string; banner_url?: string };
+type EventRecord = { id: string; title: string; description?: string; event_type: string; start_at: string; end_at?: string; location?: string };
 
-export default function SpaceDashboardScreen() {
-  const [tab, setTab] = useState<'overview' | 'roles' | 'tasks' | 'pings'>('overview');
-  const [banner, setBanner] = useState<PingPayload | null>({
-    ping_id: 'ping-demo',
-    space_id: 'space-lab',
-    created_by: 'lead-1',
-    ping_level: 1,
-    category: 'task',
-    title: 'Task update',
-    message: 'Material prep is in progress',
-    created_at: new Date().toISOString(),
-  });
+export default function SpaceDashboardScreen({ userId }: { userId: string }) {
+  const [tab, setTab] = useState<'overview' | 'roles' | 'tasks' | 'events' | 'notifications'>('overview');
+  const [spaces, setSpaces] = useState<SpaceRecord[]>([]);
+  const [activeSpaceId, setActiveSpaceId] = useState<string>();
+  const [roles, setRoles] = useState<SpaceRole[]>([]);
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [groups, setGroups] = useState<ChannelGroup[]>([]);
+  const [tasks, setTasks] = useState<SpaceTask[]>([]);
+  const [events, setEvents] = useState<EventRecord[]>([]);
+  const [notifications, setNotifications] = useState<PingPayload[]>([]);
+  const [modal, setModal] = useState<ModalKind>(null);
+  const [error, setError] = useState('');
+  const [dmOpen, setDmOpen] = useState(false);
+  const [dmQuery, setDmQuery] = useState('');
+  const [dmUsers, setDmUsers] = useState<UserSummary[]>([]);
+  const [dmPeer, setDmPeer] = useState<UserSummary>();
+  const [dmDraft, setDmDraft] = useState('');
+  const router = useRouter();
+  const socket = useSpaceSocket({ serverUrl: backendUrl, spaceId: activeSpaceId, userId: userId || undefined, onPing: (ping) => setNotifications((current) => [ping, ...current]), onTaskStateChanged: (task) => setTasks((current) => current.some((entry) => entry.id === task.id) ? current.map((entry) => entry.id === task.id ? task : entry) : [task, ...current]), onSpaceBroadcast: () => { void refreshActiveSpace(); } });
 
-  const socket = useSpaceSocket({
-    serverUrl: 'http://192.168.1.10:3000',
-    spaceId: 'space-lab',
-    userId: 'user-1',
-    enabled: true,
-    onEmergencyPing: (payload) => setBanner(payload),
-    onTaskStateChanged: (_task, meta) => {
-      setBanner({
-        ping_id: `ping-${Date.now()}`,
-        space_id: 'space-lab',
-        created_by: meta.actor_id || 'system',
-        ping_level: 1,
-        title: 'Task update',
-        message: `${meta.new_status || 'updated'} · ${meta.old_status || 'pending'}`,
-        category: 'task',
-        created_at: new Date().toISOString(),
-      });
-    },
-  });
+  const refreshSpaces = useCallback(async () => {
+    const response = await fetch(`${backendUrl}/api/spaces`);
+    const payload = await response.json();
+    const nextSpaces = Array.isArray(payload.spaces) ? payload.spaces : [];
+    setSpaces(nextSpaces);
+    if (!activeSpaceId && nextSpaces[0]) setActiveSpaceId(nextSpaces[0].id);
+  }, [activeSpaceId]);
 
+  const refreshActiveSpace = useCallback(async () => {
+    if (!activeSpaceId) return;
+    const response = await fetch(`${backendUrl}/api/spaces/${activeSpaceId}?user_id=${encodeURIComponent(userId)}`);
+    if (!response.ok) return;
+    const payload = await response.json();
+    setRoles(Array.isArray(payload.roles) ? payload.roles : []);
+    setChannels(Array.isArray(payload.channels) ? payload.channels : []);
+    setGroups(Array.isArray(payload.groups) ? payload.groups : []);
+    setTasks(Array.isArray(payload.tasks) ? payload.tasks : []);
+    setEvents(Array.isArray(payload.events) ? payload.events : []);
+  }, [activeSpaceId, userId]);
+
+  useEffect(() => { refreshSpaces().catch(() => setError('Unable to load spaces.')); }, [refreshSpaces]);
+  useEffect(() => { refreshActiveSpace().catch(() => setError('Unable to load this space.')); }, [refreshActiveSpace]);
+  const activeSpace = spaces.find((space) => space.id === activeSpaceId);
   const groupedTasks = useMemo(() => {
-    const groups: Record<TaskStatus, SpaceTask[]> = {
-      pending: [],
-      assigned: [],
-      in_progress: [],
-      submitted: [],
-      approved: [],
-      rejected: [],
-      blocked: [],
-    };
-
-    for (const task of socket.tasks.length ? socket.tasks : mockTasks) {
-      groups[task.status].push(task);
-    }
-
+    const groups: Record<TaskStatus, SpaceTask[]> = { pending: [], assigned: [], in_progress: [], submitted: [], approved: [], rejected: [], blocked: [] };
+    [...tasks, ...socket.tasks.filter((task) => !tasks.some((entry) => entry.id === task.id))].forEach((task) => groups[task.status].push(task));
     return groups;
-  }, [socket.tasks]);
+  }, [socket.tasks, tasks]);
+  const requireSpace = (kind: Exclude<ModalKind, 'space'>) => { if (!activeSpaceId) { setError(`Create or select a space before creating ${kind}.`); return; } setError(''); setModal(kind); };
+  const create = async (path: string, body: Record<string, unknown>) => { if (!activeSpaceId && path !== '/api/spaces') return; try { const response = await fetch(`${backendUrl}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.error || 'Creation failed'); } await refreshSpaces(); await refreshActiveSpace(); setModal(null); } catch (creationError) { setError(creationError instanceof Error ? creationError.message : 'Creation failed'); } };
 
-  const activePing = banner ?? null;
-  const pingLevel = activePing?.ping_level ?? 0;
-  const pingStyle = pingMeta[pingLevel];
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.scroller} showsVerticalScrollIndicator={false}>
-        {activePing && (
-          <View
-            style={[
-              styles.pingBanner,
-              { backgroundColor: pingLevel === 3 ? '#3B0C0C' : pingLevel === 2 ? '#211B4C' : pingLevel === 1 ? '#2C1A00' : '#111827' },
-              pingLevel === 3 && styles.pingEmergency,
-            ]}
-          >
-            <View style={[styles.pingBadge, { backgroundColor: pingStyle.chip, borderColor: pingStyle.accent }]}> 
-              <Text style={styles.pingBadgeText}>{pingStyle.label}</Text>
-            </View>
-            <View style={styles.pingContent}>
-              <Text style={styles.pingTitle}>{activePing.title}</Text>
-              <Text style={styles.pingMessage}>{activePing.message || 'System update'}</Text>
-            </View>
-            {pingLevel === 3 && (
-              <View style={styles.pingActions}>
-                <Pressable style={[styles.actionButton, styles.dismissButton]} onPress={() => setBanner(null)}>
-                  <Text style={styles.actionText}>Dismiss</Text>
-                </Pressable>
-                <Pressable style={[styles.actionButton, styles.ackButton]} onPress={() => socket.acknowledgePing(activePing.ping_id)}>
-                  <Text style={styles.actionText}>Acknowledge</Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
-        )}
-
-        <View style={styles.headerCard}>
-          <View>
-            <Text style={styles.eyebrow}>Active space</Text>
-            <Text style={styles.title}>MOF Synthesis Lab</Text>
-            <Text style={styles.subtitle}>12 members · Ops online · 98% sync</Text>
-          </View>
-          <View style={styles.statusPill}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Live</Text>
-          </View>
-        </View>
-
-        <View style={styles.tabRow}>
-          {(['overview', 'roles', 'tasks', 'pings'] as const).map((item) => (
-            <Pressable
-              key={item}
-              onPress={() => setTab(item)}
-              style={[styles.tab, tab === item && styles.tabActive]}
-            >
-              <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text>
-            </Pressable>
-          ))}
-        </View>
-
-        {tab === 'overview' && (
-          <>
-            <View style={styles.metricGrid}>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Tasks</Text>
-                <Text style={styles.metricValue}>24</Text>
-                <Text style={styles.metricHint}>+6 today</Text>
-              </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>XP</Text>
-                <Text style={styles.metricValue}>1,380</Text>
-                <Text style={styles.metricHint}>Pool +220</Text>
-              </View>
-              <View style={styles.metricCard}>
-                <Text style={styles.metricLabel}>Bots</Text>
-                <Text style={styles.metricValue}>3</Text>
-                <Text style={styles.metricHint}>2 verified</Text>
-              </View>
-            </View>
-
-            <View style={styles.sectionCard}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Channels</Text>
-                <Text style={styles.sectionMeta}>4 live</Text>
-              </View>
-              {channelSeed.map((channel) => (
-                <View key={channel.id} style={styles.channelRow}>
-                  <View style={styles.channelIconWrap}>
-                    <Text style={styles.channelIcon}>{channel.type === 'text' ? 'T' : channel.type === 'voice' ? 'V' : 'M'}</Text>
-                  </View>
-                  <View style={styles.channelMeta}>
-                    <Text style={styles.channelName}>#{channel.name}</Text>
-                    <Text style={styles.channelType}>{channel.type.toUpperCase()}</Text>
-                  </View>
-                  <View style={[styles.channelLive, channel.active && styles.channelLiveActive]} />
-                </View>
-              ))}
-            </View>
-
-            <View style={styles.sectionCard}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Activity stream</Text>
-                <Text style={styles.sectionMeta}>Live feed</Text>
-              </View>
-              {[{ label: 'Bot verified', detail: 'mof-bot-01 accepted' }, { label: 'Task routed', detail: 'Supervisor assigned review' }, { label: 'Ping raised', detail: 'Emergency override acknowledged' }].map((item) => (
-                <View key={item.label} style={styles.activityRow}>
-                  <View style={styles.activityDot} />
-                  <View style={styles.activityTextWrap}>
-                    <Text style={styles.activityTitle}>{item.label}</Text>
-                    <Text style={styles.activityDetail}>{item.detail}</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          </>
-        )}
-
-        {tab === 'roles' && (
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Role matrix</Text>
-              <Text style={styles.sectionMeta}>{mockRoles.length} roles</Text>
-            </View>
-            {mockRoles.map((role) => (
-              <View key={role.id} style={styles.roleCard}>
-                <View style={styles.roleHeaderRow}>
-                  <Text style={styles.roleName}>{role.name}</Text>
-                  <Text style={styles.rolePriority}>#{role.priority_level}</Text>
-                </View>
-                <View style={styles.permissionGrid}>
-                  {[
-                    { key: 'can_manage_tasks', value: role.can_manage_tasks },
-                    { key: 'can_manage_events', value: role.can_manage_events },
-                    { key: 'can_manage_bots', value: role.can_manage_bots },
-                    { key: 'can_kick', value: role.can_kick },
-                  ].map((permission) => (
-                    <View key={permission.key} style={styles.permissionRow}>
-                      <Text style={styles.permissionKey}>{permission.key}</Text>
-                      <View style={[styles.permissionValue, permission.value && styles.permissionValueOn]}>
-                        <Text style={styles.permissionValueText}>{permission.value ? 'ON' : 'OFF'}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {tab === 'tasks' && (
-          <View style={styles.taskBoard}>
-            {Object.entries(groupedTasks).map(([status, items]) => (
-              <View key={status} style={styles.column}>
-                <View style={styles.columnHeader}>
-                  <Text style={styles.columnTitle}>{status.replace('_', ' ')}</Text>
-                  <Text style={styles.columnCount}>{items.length}</Text>
-                </View>
-                {items.length === 0 ? (
-                  <View style={styles.emptyColumn}>
-                    <Text style={styles.emptyText}>No tasks</Text>
-                  </View>
-                ) : (
-                  items.map((task) => (
-                    <View key={task.id} style={styles.taskCard}>
-                      <View style={styles.taskHeader}>
-                        <View style={styles.avatar}>S</View>
-                        <View style={styles.taskHeadText}>
-                          <Text style={styles.taskTitle}>{task.title}</Text>
-                          <Text style={styles.taskMeta}>Priority · High</Text>
-                        </View>
-                        <View style={[styles.statusBadge, { backgroundColor: statusStyles[task.status].chip }]}>
-                          <Text style={[styles.statusBadgeText, { color: statusStyles[task.status].text }]}>{task.status}</Text>
-                        </View>
-                      </View>
-                      <Text style={styles.taskDescription}>{task.description || 'No description provided.'}</Text>
-                      <View style={styles.taskMetaRow}>
-                        <Text style={styles.metaLabel}>Assignee</Text>
-                        <Text style={styles.metaValue}>{task.assignee_user_id || 'Unassigned'}</Text>
-                      </View>
-                      <View style={styles.taskMetaRow}>
-                        <Text style={styles.metaLabel}>XP</Text>
-                        <Text style={styles.metaValue}>+120</Text>
-                      </View>
-                      <View style={styles.taskMetaRow}>
-                        <Text style={styles.metaLabel}>Deadline</Text>
-                        <Text style={styles.metaValue}>{new Date(task.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-                      </View>
-                      <View style={styles.actionRow}>
-                        <Pressable style={[styles.secondaryAction, { borderColor: '#334155' }]} onPress={() => socket.emitTaskStatusUpdate(task.id, 'approved')}>
-                          <Text style={styles.secondaryActionText}>Submit Work</Text>
-                        </Pressable>
-                        <Pressable style={[styles.primaryAction, { backgroundColor: '#10B981' }]} onPress={() => socket.emitTaskStatusUpdate(task.id, 'approved')}>
-                          <Text style={styles.primaryActionText}>Approve</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-            ))}
-          </View>
-        )}
-
-        {tab === 'pings' && (
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Ping matrix</Text>
-              <Text style={styles.sectionMeta}>4-tier alert engine</Text>
-            </View>
-            {([0, 1, 2, 3] as PingLevel[]).map((level) => (
-              <View key={level} style={styles.pingMatrixRow}>
-                <View style={[styles.levelBadge, { backgroundColor: pingMeta[level].chip, borderColor: pingMeta[level].accent }]}>
-                  <Text style={styles.levelBadgeText}>{pingMeta[level].label}</Text>
-                </View>
-                <View style={styles.levelInfo}>
-                  <Text style={styles.levelInfoTitle}>{pingMeta[level].note}</Text>
-                  <Text style={styles.levelInfoMeta}>Payload intensity: {level}</Text>
-                </View>
-              </View>
-            ))}
-
-            <Pressable
-              style={[styles.primaryAction, styles.ctaButton, { backgroundColor: '#6366F1' }]}
-              onPress={() =>
-                socket.socket?.emit('ping:dispatch', {
-                  ping_id: `ping-${Date.now()}`,
-                  space_id: 'space-lab',
-                  target_user_id: 'user-1',
-                  created_by: 'user-1',
-                  ping_level: 2,
-                  category: 'system',
-                  title: 'Bot action',
-                  message: 'Verification completed for bot gateway',
-                  created_at: new Date().toISOString(),
-                })
-              }
-            >
-              <Text style={styles.primaryActionText}>Dispatch test ping</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {!socket.connected && (
-          <View style={styles.connectionState}>
-            <ActivityIndicator color="#6366F1" />
-            <Text style={styles.connectionText}>{socket.connecting ? 'Connecting to backend…' : 'Socket disconnected'}</Text>
-          </View>
-        )}
-      </ScrollView>
-    </SafeAreaView>
-  );
+  return <SafeAreaView style={styles.safeArea}>
+    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      {!!error && <Pressable onPress={() => setError('')} style={styles.error}><Text style={styles.errorText}>{error}</Text></Pressable>}
+      <View style={styles.header}><View style={styles.flex}><Text style={styles.kicker}>Workspace</Text><Text style={styles.title}>{activeSpace?.name || 'No space selected'}</Text><Text style={styles.muted}>{activeSpace?.description || 'Create a space to begin.'}</Text></View><View style={{ gap: 6, alignItems: 'stretch' }}><Pressable style={styles.smallButton} onPress={() => setDmOpen(true)}><Text style={styles.buttonText}>DMs</Text></Pressable><Pressable style={styles.smallButton} onPress={() => setTab('roles')}><Text style={styles.buttonText}>Roles</Text></Pressable><Pressable style={styles.smallButton} onPress={() => setTab('tasks')}><Text style={styles.buttonText}>Tasks</Text></Pressable><Pressable style={styles.smallButton} onPress={() => setTab('events')}><Text style={styles.buttonText}>Events</Text></Pressable><Pressable style={styles.createButton} onPress={() => setModal('space')}><Text style={styles.buttonText}>+ Space</Text></Pressable></View></View>
+      {spaces.length > 0 && <ScrollView horizontal contentContainerStyle={styles.spacePicker}>{spaces.map((space) => <Pressable key={space.id} onPress={() => setActiveSpaceId(space.id)} style={[styles.spaceChip, activeSpaceId === space.id && styles.spaceChipActive]}><Text style={styles.spaceChipText}>{space.name}</Text></Pressable>)}</ScrollView>}
+      {notifications[0] && <NotificationBanner notification={notifications[0]} onRead={() => setNotifications((current) => current.slice(1))} />}
+      <View style={styles.tabs}>{(['overview', 'notifications'] as const).map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, item === tab && styles.tabActive]}><Text style={[styles.tabText, item === tab && styles.tabTextActive]}>{item}</Text></Pressable>)}</View>
+      {tab === 'overview' && <><Section title="Channels" action="+ Create Channel" onAction={() => requireSpace('channel')}><EmptyOrList empty="No channels created yet." items={channels} renderItem={(channel) => <Pressable key={channel.id} style={styles.row} onPress={() => router.push({ pathname: '/channel/[channelId]', params: { channelId: channel.id, spaceId: activeSpaceId, name: channel.name, type: channel.type, userId } })}><Text style={styles.rowTitle}>#{channel.name}</Text><Text style={styles.muted}>{groups.find((group) => group.id === channel.group_id)?.name || 'Ungrouped'} · {channel.type}</Text></Pressable>} /></Section><Section title="Activity" count="0"><EmptyState text="No activity yet." /></Section></>}
+      {tab === 'roles' && <Section title="Roles" action="+ Create Role" onAction={() => requireSpace('role')}><EmptyOrList empty="No roles created yet." items={roles} renderItem={(role) => <View key={role.id} style={styles.role}><View style={[styles.roleDot, { backgroundColor: role.color || '#6366F1' }]} /><View style={styles.flex}><Text style={styles.rowTitle}>{role.name}</Text><Text style={styles.muted}>Priority {role.priority_level}</Text></View><Text style={styles.muted}>{permissionKeys.filter((key) => role[key]).length} permissions</Text></View>} /></Section>}
+      {tab === 'tasks' && <><ActionBar title="Task Board" action="+ Create Task" onAction={() => requireSpace('task')} /><ScrollView horizontal contentContainerStyle={styles.board}>{taskStatuses.map((status) => <View key={status} style={styles.column}><View style={styles.columnHead}><Text style={styles.rowTitle}>{status.replace('_', ' ')}</Text><Text style={styles.muted}>{groupedTasks[status].length}</Text></View>{groupedTasks[status].length === 0 ? <EmptyState text="No tasks" /> : groupedTasks[status].map((task) => <View key={task.id} style={styles.task}><Text style={styles.rowTitle}>{task.title}</Text><Text style={styles.muted}>{task.assignee_user_id || task.assignee_role_id || 'Unassigned'}</Text></View>)}</View>)}</ScrollView></>}
+      {tab === 'events' && <Section title="Events" action="+ Create Event" onAction={() => requireSpace('event')}><EmptyOrList empty="No events scheduled yet." items={events} renderItem={(event) => <View key={event.id} style={styles.row}><View style={styles.flex}><Text style={styles.rowTitle}>{event.title}</Text><Text style={styles.muted}>{event.event_type} · {event.location || 'No location'}</Text></View><Text style={styles.muted}>{new Date(event.start_at).toLocaleDateString()}</Text></View>} /></Section>}
+      {tab === 'notifications' && <Section title="Notification Center" count={`${notifications.length}`}><EmptyOrList empty="No notifications yet." items={notifications} renderItem={(notification) => <View key={notification.ping_id} style={styles.row}><View style={[styles.badge, { borderColor: pingMeta[notification.ping_level].accent }]}><Text style={styles.badgeText}>{pingMeta[notification.ping_level].label}</Text></View><View style={styles.flex}><Text style={styles.rowTitle}>{notification.title}</Text><Text style={styles.muted}>{notification.message || 'Workspace update'}</Text></View><Pressable onPress={() => setNotifications((current) => current.filter((item) => item.ping_id !== notification.ping_id))} style={styles.readButton}><Text style={styles.readText}>Read</Text></Pressable></View>} /></Section>}
+    </ScrollView>
+    <CreationModal kind={modal} activeSpaceId={activeSpaceId} userId={userId} roles={roles} groups={groups} events={events} onClose={() => setModal(null)} onSubmit={create} />
+    <DMDrawer open={dmOpen} query={dmQuery} users={dmUsers} peer={dmPeer} draft={dmDraft} messages={socket.messages} onClose={() => setDmOpen(false)} onQuery={(query) => { setDmQuery(query); fetch(`${backendUrl}/api/users/search?q=${encodeURIComponent(query)}`).then((response) => response.json()).then((payload) => setDmUsers(Array.isArray(payload.users) ? payload.users : [])).catch(() => setDmUsers([])); }} onSelect={setDmPeer} onDraft={setDmDraft} onSend={() => { if (dmPeer && dmDraft.trim()) { socket.sendDirectMessage(dmPeer.id, dmDraft.trim()); setDmDraft(''); } }} />
+  </SafeAreaView>;
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#0F172A',
-  },
-  scroller: {
-    paddingHorizontal: 16,
-    paddingBottom: 32,
-    gap: 16,
-  },
-  pingBanner: {
-    marginTop: 8,
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#334155',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  pingEmergency: {
-    borderColor: '#EF4444',
-    shadowColor: '#EF4444',
-    shadowOpacity: 0.5,
-  },
-  pingBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  pingBadgeText: {
-    color: '#F8FAFC',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-  },
-  pingContent: {
-    flex: 1,
-  },
-  pingTitle: {
-    color: '#F8FAFC',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  pingMessage: {
-    color: '#E2E8F0',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  pingActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  actionButton: {
-    minHeight: 44,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  dismissButton: {
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  ackButton: {
-    backgroundColor: '#EF4444',
-  },
-  actionText: {
-    color: '#F8FAFC',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  headerCard: {
-    borderRadius: 18,
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-    padding: 18,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  eyebrow: {
-    color: '#94A3B8',
-    fontSize: 11,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: '#F8FAFC',
-    fontSize: 28,
-    fontWeight: '800',
-    marginTop: 6,
-  },
-  subtitle: {
-    color: '#94A3B8',
-    fontSize: 12,
-    marginTop: 4,
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0F172A',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#10B981',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    backgroundColor: '#10B981',
-    borderRadius: 999,
-    marginRight: 6,
-  },
-  statusText: {
-    color: '#ECFDF5',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  tabRow: {
-    flexDirection: 'row',
-    backgroundColor: '#111827',
-    borderRadius: 14,
-    padding: 6,
-    gap: 6,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  tab: {
-    flex: 1,
-    minHeight: 42,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 10,
-  },
-  tabActive: {
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#6366F1',
-  },
-  tabText: {
-    color: '#94A3B8',
-    textTransform: 'capitalize',
-    fontWeight: '700',
-  },
-  tabTextActive: {
-    color: '#F8FAFC',
-  },
-  metricGrid: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  metricCard: {
-    flex: 1,
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 16,
-    padding: 16,
-  },
-  metricLabel: {
-    color: '#94A3B8',
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  metricValue: {
-    color: '#F8FAFC',
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  metricHint: {
-    color: '#10B981',
-    marginTop: 8,
-    fontSize: 12,
-  },
-  sectionCard: {
-    backgroundColor: '#1E293B',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#334155',
-    padding: 16,
-    gap: 12,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  sectionTitle: {
-    color: '#F8FAFC',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  sectionMeta: {
-    color: '#94A3B8',
-    fontSize: 11,
-  },
-  channelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#0F172A',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  channelIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#111827',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  channelIcon: {
-    color: '#F8FAFC',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  channelMeta: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  channelName: {
-    color: '#F8FAFC',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  channelType: {
-    color: '#94A3B8',
-    fontSize: 10,
-    letterSpacing: 1,
-    marginTop: 2,
-  },
-  channelLive: {
-    width: 10,
-    height: 10,
-    borderRadius: 999,
-    backgroundColor: '#334155',
-  },
-  channelLiveActive: {
-    backgroundColor: '#10B981',
-  },
-  activityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  activityDot: {
-    width: 10,
-    height: 10,
-    backgroundColor: '#6366F1',
-    borderRadius: 999,
-  },
-  activityTextWrap: {
-    flex: 1,
-  },
-  activityTitle: {
-    color: '#F8FAFC',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  activityDetail: {
-    color: '#94A3B8',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  roleCard: {
-    borderWidth: 1,
-    borderColor: '#334155',
-    backgroundColor: '#0F172A',
-    borderRadius: 14,
-    padding: 12,
-  },
-  roleHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  roleName: {
-    color: '#F8FAFC',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  rolePriority: {
-    color: '#A5B4FC',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  permissionGrid: {
-    gap: 8,
-  },
-  permissionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#111827',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  permissionKey: {
-    color: '#E2E8F0',
-    fontSize: 12,
-    textTransform: 'capitalize',
-  },
-  permissionValue: {
-    minWidth: 58,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: '#1E293B',
-    borderWidth: 1,
-    borderColor: '#334155',
-    alignItems: 'center',
-  },
-  permissionValueOn: {
-    backgroundColor: '#052E2B',
-    borderColor: '#10B981',
-  },
-  permissionValueText: {
-    color: '#F8FAFC',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  taskBoard: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  column: {
-    flex: 1,
-    minWidth: 220,
-    backgroundColor: '#111827',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 16,
-    padding: 12,
-  },
-  columnHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  columnTitle: {
-    color: '#F8FAFC',
-    fontWeight: '700',
-    textTransform: 'capitalize',
-  },
-  columnCount: {
-    color: '#94A3B8',
-    fontSize: 12,
-  },
-  emptyColumn: {
-    minHeight: 100,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 12,
-  },
-  emptyText: {
-    color: '#94A3B8',
-    fontSize: 12,
-  },
-  taskCard: {
-    backgroundColor: '#1E293B',
-    borderColor: '#334155',
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 10,
-  },
-  taskHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  avatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#6366F1',
-    justifyContent: 'center',
-    alignItems: 'center',
-    color: '#F8FAFC',
-    fontWeight: '700',
-  },
-  taskHeadText: {
-    flex: 1,
-  },
-  taskTitle: {
-    color: '#F8FAFC',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  taskMeta: {
-    color: '#94A3B8',
-    fontSize: 10,
-    marginTop: 2,
-  },
-  statusBadge: {
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  statusBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-  },
-  taskDescription: {
-    color: '#E2E8F0',
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 10,
-  },
-  taskMetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  metaLabel: {
-    color: '#94A3B8',
-    fontSize: 11,
-  },
-  metaValue: {
-    color: '#F8FAFC',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  actionRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
-  },
-  secondaryAction: {
-    flex: 1,
-    minHeight: 42,
-    borderRadius: 12,
-    borderWidth: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  secondaryActionText: {
-    color: '#F8FAFC',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  primaryAction: {
-    flex: 1,
-    minHeight: 42,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 12,
-  },
-  primaryActionText: {
-    color: '#F8FAFC',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  pingMatrixRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#0F172A',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-  levelBadge: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    minWidth: 82,
-    alignItems: 'center',
-  },
-  levelBadgeText: {
-    color: '#F8FAFC',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  levelInfo: {
-    flex: 1,
-  },
-  levelInfoTitle: {
-    color: '#F8FAFC',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  levelInfoMeta: {
-    color: '#94A3B8',
-    fontSize: 11,
-    marginTop: 2,
-  },
-  ctaButton: {
-    marginTop: 8,
-  },
-  connectionState: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-  },
-  connectionText: {
-    color: '#94A3B8',
-    fontSize: 12,
-  },
-});
+function NotificationBanner({ notification, onRead }: { notification: PingPayload; onRead: () => void }) { return <View style={[styles.banner, { borderColor: pingMeta[notification.ping_level].accent }]}><View style={styles.flex}><Text style={styles.rowTitle}>{notification.title}</Text><Text style={styles.muted}>{notification.message || 'New notification'}</Text></View><Pressable onPress={onRead} style={styles.readButton}><Text style={styles.readText}>Mark as Read</Text></Pressable></View>; }
+function Section({ title, count, action, onAction, children }: { title: string; count?: string; action?: string; onAction?: () => void; children: React.ReactNode }) { return <View style={styles.section}><View style={styles.sectionHead}><Text style={styles.sectionTitle}>{title}</Text><View style={styles.sectionActions}>{count && <Text style={styles.muted}>{count}</Text>}{action && <Pressable onPress={onAction} style={styles.smallButton}><Text style={styles.buttonText}>{action}</Text></Pressable>}</View></View>{children}</View>; }
+function ActionBar({ title, action, onAction }: { title: string; action: string; onAction: () => void }) { return <View style={styles.actionBar}><Text style={styles.sectionTitle}>{title}</Text><Pressable onPress={onAction} style={styles.smallButton}><Text style={styles.buttonText}>{action}</Text></Pressable></View>; }
+function EmptyState({ text }: { text: string }) { return <View style={styles.empty}><Text style={styles.muted}>{text}</Text></View>; }
+function EmptyOrList<T>({ empty, items, renderItem }: { empty: string; items: T[]; renderItem: (item: T) => React.ReactNode }) { return items.length === 0 ? <EmptyState text={empty} /> : <>{items.map(renderItem)}</>; }
+
+function DMDrawer({ open, query, users, peer, draft, messages, onClose, onQuery, onSelect, onDraft, onSend }: { open: boolean; query: string; users: UserSummary[]; peer?: UserSummary; draft: string; messages: DirectMessage[]; onClose: () => void; onQuery: (query: string) => void; onSelect: (user: UserSummary) => void; onDraft: (draft: string) => void; onSend: () => void }) {
+  const visibleMessages = peer ? messages.filter((message) => message.sender_id === peer.id || message.receiver_id === peer.id) : [];
+  return <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}><View style={styles.modalShade}><View style={{ maxHeight: '92%', backgroundColor: '#1E293B', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, gap: 12 }}><View style={styles.modalHead}><Text style={styles.sectionTitle}>Direct Messages</Text><Pressable onPress={onClose}><Text style={styles.close}>Close</Text></Pressable></View><TextInput value={query} onChangeText={onQuery} placeholder="Search registered users" placeholderTextColor="#64748B" style={styles.input} /><ScrollView horizontal contentContainerStyle={styles.choiceRow}>{users.map((user) => <Pressable key={user.id} onPress={() => onSelect(user)} style={[styles.choice, peer?.id === user.id && styles.choiceActive]}><Text style={styles.buttonText}>{user.display_name}</Text></Pressable>)}</ScrollView>{peer ? <><Text style={styles.muted}>Chatting with {peer.display_name}</Text><ScrollView style={{ maxHeight: 260 }}>{visibleMessages.length === 0 ? <EmptyState text="No direct messages yet." /> : visibleMessages.map((message) => <View key={message.id} style={{ backgroundColor: '#0F172A', borderColor: '#334155', borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 8 }}><Text style={{ color: '#A5B4FC', fontSize: 11, fontWeight: '800' }}>{message.sender_id}</Text><Text style={{ color: '#F8FAFC', fontSize: 14, marginTop: 4 }}>{message.body || 'Attachment'}</Text></View>)}</ScrollView><View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><TextInput value={draft} onChangeText={onDraft} placeholder="Write a message" placeholderTextColor="#64748B" style={styles.input} /><Pressable onPress={onSend} disabled={!draft.trim()} style={[{ minHeight: 44, borderRadius: 10, backgroundColor: '#10B981', paddingHorizontal: 12, justifyContent: 'center' }, !draft.trim() && { backgroundColor: '#334155' }]}><Text style={styles.buttonText}>Send</Text></Pressable></View></> : <EmptyState text="Search and select a user to start a DM." />}</View></View></Modal>;
+}
+
+function CreationModal({ kind, activeSpaceId, userId, roles, groups, events, onClose, onSubmit }: { kind: ModalKind; activeSpaceId?: string; userId: string; roles: SpaceRole[]; groups: ChannelGroup[]; events: EventRecord[]; onClose: () => void; onSubmit: (path: string, body: Record<string, unknown>) => Promise<void> }) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [permissions, setPermissions] = useState<Record<string, boolean>>({});
+  const [allowedRoles, setAllowedRoles] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setValues({}); setPermissions({}); setAllowedRoles([]); }, [kind]);
+  if (!kind) return null;
+  const update = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
+  const submit = async () => { setBusy(true); try { const path = kind === 'space' ? '/api/spaces' : `/api/spaces/${activeSpaceId}/${kind === 'role' ? 'roles' : kind === 'channel' ? 'channels' : kind === 'task' ? 'tasks' : 'events'}`; const body: Record<string, unknown> = { ...values, ...(kind === 'space' ? { created_by: userId } : { actor_id: userId }), ...(kind === 'role' ? { ...permissions } : {}), ...(kind === 'channel' ? { type: values.type || 'text', allowed_role_ids: allowedRoles } : {}), ...(kind === 'task' ? { created_by: userId, proof_required: values.proof_required !== 'false' } : {}), ...(kind === 'event' ? { creator_id: userId } : {}) }; await onSubmit(path, body); } finally { setBusy(false); } };
+  const title = kind === 'space' ? 'Create Space' : `Create ${kind}`;
+  return <Modal visible transparent animationType="slide" onRequestClose={onClose}><View style={styles.modalShade}><ScrollView contentContainerStyle={styles.modal}><View style={styles.modalHead}><Text style={styles.sectionTitle}>{title}</Text><Pressable onPress={onClose}><Text style={styles.close}>Close</Text></Pressable></View>{kind === 'space' && <><Field label="Space Title" value={values.name} onChange={(value) => update('name', value)} /><Field label="Icon URL" value={values.icon_url} onChange={(value) => update('icon_url', value)} /><Field label="Banner URL" value={values.banner_url} onChange={(value) => update('banner_url', value)} /><Field label="Description" value={values.description} onChange={(value) => update('description', value)} /></>}{kind === 'channel' && <><Field label="Channel Name" value={values.name} onChange={(value) => update('name', value)} /><Choice label="Type" values={['text', 'voice']} selected={values.type} onSelect={(value) => update('type', value)} /><Choice label="Group" values={groups.map((group) => group.id)} selected={values.group_id} onSelect={(value) => update('group_id', value)} /><Text style={styles.label}>Allowed Roles</Text>{roles.map((role) => <Toggle key={role.id} label={role.name} value={allowedRoles.includes(role.id)} onChange={() => setAllowedRoles((current) => current.includes(role.id) ? current.filter((id) => id !== role.id) : [...current, role.id])} />)}</>}{kind === 'role' && <><Field label="Role Name" value={values.name} onChange={(value) => update('name', value)} /><Field label="Hex Color" value={values.color} onChange={(value) => update('color', value)} /><Field label="Priority" value={values.priority_level} onChange={(value) => update('priority_level', value)} keyboardType="numeric" />{permissionKeys.map((key) => <Toggle key={key} label={permissionLabels[key]} value={Boolean(permissions[key])} onChange={() => setPermissions((current) => ({ ...current, [key]: !current[key] }))} />)}</>}{kind === 'task' && <><Field label="Title" value={values.title} onChange={(value) => update('title', value)} /><Field label="Description" value={values.description} onChange={(value) => update('description', value)} /><Choice label="Event" values={events.map((event) => event.id)} selected={values.event_id} onSelect={(value) => update('event_id', value)} /><Field label="Assignee User ID" value={values.assignee_user_id} onChange={(value) => update('assignee_user_id', value)} /><Field label="Assignee Role ID" value={values.assignee_role_id} onChange={(value) => update('assignee_role_id', value)} /><Field label="Due At" value={values.due_at} onChange={(value) => update('due_at', value)} /></>}{kind === 'event' && <><Field label="Event Name" value={values.title} onChange={(value) => update('title', value)} /><Field label="Description" value={values.description} onChange={(value) => update('description', value)} /><Field label="Event Type" value={values.event_type} onChange={(value) => update('event_type', value)} /><Field label="Scheduled Start" value={values.start_at} onChange={(value) => update('start_at', value)} /><Field label="Scheduled End" value={values.end_at} onChange={(value) => update('end_at', value)} /><Field label="Location or Channel Link" value={values.location} onChange={(value) => update('location', value)} /></>}<Pressable disabled={busy} onPress={submit} style={styles.submit}><Text style={styles.buttonText}>{busy ? 'Saving...' : 'Create'}</Text></Pressable></ScrollView></View></Modal>;
+}
+function Field({ label, value, onChange, keyboardType }: { label: string; value?: string; onChange: (value: string) => void; keyboardType?: 'numeric' }) { return <View><Text style={styles.label}>{label}</Text><TextInput value={value || ''} onChangeText={onChange} keyboardType={keyboardType} placeholderTextColor="#64748B" style={styles.input} /></View>; }
+function Choice({ label, values, selected, onSelect }: { label: string; values: string[]; selected?: string; onSelect: (value: string) => void }) { return <View><Text style={styles.label}>{label}</Text><ScrollView horizontal contentContainerStyle={styles.choiceRow}>{values.map((value) => <Pressable key={value} onPress={() => onSelect(value)} style={[styles.choice, selected === value && styles.choiceActive]}><Text style={styles.buttonText}>{value}</Text></Pressable>)}</ScrollView></View>; }
+function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: () => void }) { return <Pressable onPress={onChange} style={styles.toggle}><Text style={styles.toggleLabel}>{label}</Text><Text style={[styles.toggleValue, value && styles.toggleOn]}>{value ? 'ON' : 'OFF'}</Text></Pressable>; }
+
+const styles = StyleSheet.create({ safeArea: { flex: 1, backgroundColor: '#0F172A' }, content: { padding: 16, gap: 16, paddingBottom: 36 }, loading: { flex: 1, backgroundColor: '#0F172A', alignItems: 'center', justifyContent: 'center' }, header: { backgroundColor: '#1E293B', borderColor: '#334155', borderWidth: 1, borderRadius: 16, padding: 18, flexDirection: 'row', alignItems: 'center' }, kicker: { color: '#94A3B8', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }, title: { color: '#F8FAFC', fontSize: 26, fontWeight: '800', marginTop: 5 }, muted: { color: '#94A3B8', fontSize: 12, marginTop: 4 }, flex: { flex: 1 }, createButton: { minHeight: 44, backgroundColor: '#6366F1', borderRadius: 10, justifyContent: 'center', paddingHorizontal: 12 }, buttonText: { color: '#FFF', fontSize: 12, fontWeight: '800' }, error: { borderColor: '#EF4444', borderWidth: 1, backgroundColor: '#3B0C0C', borderRadius: 10, padding: 12 }, errorText: { color: '#FCA5A5', fontSize: 12 }, spacePicker: { gap: 8 }, spaceChip: { borderColor: '#334155', borderWidth: 1, borderRadius: 10, padding: 10 }, spaceChipActive: { backgroundColor: '#6366F1', borderColor: '#6366F1' }, spaceChipText: { color: '#F8FAFC', fontSize: 12, fontWeight: '700' }, banner: { backgroundColor: '#1E293B', borderWidth: 1, borderRadius: 14, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, tabs: { flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#1E293B', borderRadius: 12, padding: 5, gap: 4 }, tab: { flexGrow: 1, minWidth: '18%', minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 9, paddingHorizontal: 6 }, tabActive: { backgroundColor: '#6366F1' }, tabText: { color: '#94A3B8', textTransform: 'capitalize', fontSize: 12, fontWeight: '700' }, tabTextActive: { color: '#FFF' }, section: { backgroundColor: '#1E293B', borderColor: '#334155', borderWidth: 1, borderRadius: 16, padding: 16, gap: 10 }, sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, sectionActions: { flexDirection: 'row', alignItems: 'center', gap: 8 }, sectionTitle: { color: '#F8FAFC', fontSize: 18, fontWeight: '800' }, smallButton: { minHeight: 40, justifyContent: 'center', backgroundColor: '#6366F1', borderRadius: 10, paddingHorizontal: 10 }, row: { backgroundColor: '#0F172A', borderColor: '#334155', borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, rowTitle: { color: '#F8FAFC', fontSize: 14, fontWeight: '700' }, empty: { minHeight: 80, borderColor: '#334155', borderWidth: 1, borderRadius: 12, alignItems: 'center', justifyContent: 'center', padding: 12 }, role: { backgroundColor: '#0F172A', borderColor: '#334155', borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }, roleDot: { width: 12, height: 12, borderRadius: 12 }, board: { gap: 10 }, column: { width: 220, backgroundColor: '#1E293B', borderColor: '#334155', borderWidth: 1, borderRadius: 14, padding: 12, gap: 10 }, columnHead: { flexDirection: 'row', justifyContent: 'space-between' }, task: { backgroundColor: '#0F172A', borderColor: '#334155', borderWidth: 1, borderRadius: 12, padding: 12, gap: 5 }, actionBar: { backgroundColor: '#1E293B', borderColor: '#334155', borderWidth: 1, borderRadius: 14, padding: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5 }, badgeText: { color: '#F8FAFC', fontSize: 11, fontWeight: '700' }, readButton: { minHeight: 40, paddingHorizontal: 10, justifyContent: 'center', borderRadius: 10, backgroundColor: '#334155' }, readText: { color: '#F8FAFC', fontSize: 11, fontWeight: '700' }, modalShade: { flex: 1, backgroundColor: 'rgba(2,6,23,0.85)', justifyContent: 'flex-end' }, modal: { maxHeight: '92%', backgroundColor: '#1E293B', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, gap: 12 }, modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, close: { color: '#A5B4FC', fontWeight: '700' }, label: { color: '#CBD5E1', fontSize: 12, fontWeight: '700', marginBottom: 6 }, input: { minHeight: 48, borderColor: '#334155', borderWidth: 1, borderRadius: 10, color: '#F8FAFC', backgroundColor: '#0F172A', paddingHorizontal: 12, marginBottom: 4 }, choiceRow: { gap: 8, paddingBottom: 4 }, choice: { backgroundColor: '#334155', borderRadius: 10, padding: 12 }, choiceActive: { backgroundColor: '#6366F1' }, toggle: { minHeight: 44, backgroundColor: '#0F172A', borderColor: '#334155', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, toggleLabel: { color: '#E2E8F0', flex: 1, fontSize: 12 }, toggleValue: { color: '#94A3B8', fontWeight: '800' }, toggleOn: { color: '#10B981' }, submit: { minHeight: 48, backgroundColor: '#10B981', borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginTop: 8 } });
