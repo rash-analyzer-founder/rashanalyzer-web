@@ -1,0 +1,39 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build app",
+			"type": "shell",
+			"command": "cd \"react-nuke-testing-area\" && npm run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Verify build",
+			"type": "shell",
+			"command": "powershell -NoProfile -Command \"Set-Location 'c:\\Users\\Rashdan Ahmed\\.vscode\\My website\\react-nuke-testing-area'; npm run build\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Verify build 2",
+			"type": "shell",
+			"command": "cmd /c \"cd /d \\\"C:\\Users\\Rashdan Ahmed\\.vscode\\My website\\react-nuke-testing-area\\\" & npm run build\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Verify build 3",
+			"type": "shell",
+			"command": "powershell -NoProfile -Command \"Set-Location \\\"C:\\Users\\Rashdan Ahmed\\.vscode\\My website\\react-nuke-testing-area\\\"; npm run build\"",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
